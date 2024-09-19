@@ -98,6 +98,28 @@ def make_optimizer_and_scheduler(cfg, policy):
 
         optimizer = VQBeTOptimizer(policy, cfg)
         lr_scheduler = VQBeTScheduler(optimizer, cfg)
+    if cfg.policy.name == "actDiffusion":
+        optimizer_params_dicts = [
+            {
+                "params": [
+                    p
+                    for n, p in policy.named_parameters()
+                    if not n.startswith("model.backbone") and p.requires_grad
+                ]
+            },
+            {
+                "params": [
+                    p
+                    for n, p in policy.named_parameters()
+                    if n.startswith("model.backbone") and p.requires_grad
+                ],
+                "lr": cfg.training.lr_backbone,
+            },
+        ]
+        optimizer = torch.optim.AdamW(
+            optimizer_params_dicts, lr=cfg.training.lr, weight_decay=cfg.training.weight_decay
+        )
+        lr_scheduler = None
     else:
         raise NotImplementedError()
 

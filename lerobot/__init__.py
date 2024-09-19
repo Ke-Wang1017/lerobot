@@ -189,6 +189,7 @@ available_policies = [
     "diffusion",
     "tdmpc",
     "vqbet",
+    "actDiffusion"
 ]
 
 # lists all available robots from `lerobot/common/robot_devices/robots`
@@ -200,7 +201,7 @@ available_robots = [
 
 # keys and values refer to yaml files
 available_policies_per_env = {
-    "aloha": ["act"],
+    "aloha": ["act", "actDiffusion"],
     "pusht": ["diffusion", "vqbet"],
     "xarm": ["tdmpc"],
     "dora_aloha_real": ["act_real"],
