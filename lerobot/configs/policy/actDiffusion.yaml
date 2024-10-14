@@ -16,9 +16,11 @@ training:
   save_freq: 20000
   save_checkpoint: true
 
-  batch_size: 8
-  lr: 1e-5
-  lr_backbone: 1e-5
+  batch_size: 16
+  lr: 1.414e-5
+  lr_backbone: 1.414e-5
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
   weight_decay: 1e-4
   grad_clip_norm: 10
   online_steps_between_rollouts: 1
@@ -69,10 +71,6 @@ policy:
   # that means only the first layer is used. Here we match the original implementation by setting this to 1.
   # See this issue https://github.com/tonyzhaozh/act/issues/25#issue-2258740521.
   n_decoder_layers: 1
-  # VAE.
-  # use_vae: true
-  latent_dim: 32
-  # n_vae_encoder_layers: 4
 
   # Inference.
   temporal_ensemble_coeff: null
@@ -80,3 +78,17 @@ policy:
   # Training and loss computation.
   dropout: 0.1
   kl_weight: 10.0
+
+  # Noise scheduler.
+  noise_scheduler_type: DDIM
+  num_train_timesteps: 50
+  beta_schedule: squaredcos_cap_v2
+  beta_start: 0.0001
+  beta_end: 0.02
+  prediction_type: epsilon # epsilon / sample
+  clip_sample: True
+  clip_sample_range: 1.0
+
+  # Inference
+  num_inference_steps: 50  # if not provided, defaults to `num_train_timesteps`
+

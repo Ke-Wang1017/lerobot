@@ -126,10 +126,15 @@ class ACTDiffusionConfig:
     # that means only the first layer is used. Here we match the original implementation by setting this to 1.
     # See this issue https://github.com/tonyzhaozh/act/issues/25#issue-2258740521.
     n_decoder_layers: int = 1
-    # VAE.
-    # use_vae: bool = True
-    latent_dim: int = 32
-    # n_vae_encoder_layers: int = 4
+    # Noise scheduler.
+    noise_scheduler_type: str = "DDPM"
+    num_train_timesteps: int = 100
+    beta_schedule: str = "squaredcos_cap_v2"
+    beta_start: float = 0.0001
+    beta_end: float = 0.02
+    prediction_type: str = "epsilon"
+    clip_sample: bool = True
+    clip_sample_range: float = 1.0
 
     # Inference.
     # Note: the value used in ACT when temporal ensembling is enabled is 0.01.
@@ -138,6 +143,19 @@ class ACTDiffusionConfig:
     # Training and loss computation.
     dropout: float = 0.1
     kl_weight: float = 10.0
+
+    # Noise scheduler.
+    noise_scheduler_type: str = "DDPM"
+    num_train_timesteps: int = 100
+    beta_schedule: str = "squaredcos_cap_v2"
+    beta_start: float = 0.0001
+    beta_end: float = 0.02
+    prediction_type: str = "epsilon"
+    clip_sample: bool = True
+    clip_sample_range: float = 1.0
+
+    # Inference
+    num_inference_steps: int | None = None
 
     def __post_init__(self):
         """Input validation (not exhaustive)."""
@@ -164,3 +182,15 @@ class ACTDiffusionConfig:
             and "observation.environment_state" not in self.input_shapes
         ):
             raise ValueError("You must provide at least one image or the environment state among the inputs.")
+        # add diffusion specific checks
+        supported_prediction_types = ["epsilon", "sample"]
+        if self.prediction_type not in supported_prediction_types:
+            raise ValueError(
+                f"`prediction_type` must be one of {supported_prediction_types}. Got {self.prediction_type}."
+            )
+        supported_noise_schedulers = ["DDPM", "DDIM"]
+        if self.noise_scheduler_type not in supported_noise_schedulers:
+            raise ValueError(
+                f"`noise_scheduler_type` must be one of {supported_noise_schedulers}. "
+                f"Got {self.noise_scheduler_type}."
+            )
