@@ -12,13 +12,13 @@ override_dataset_stats:
 training:
   offline_steps: 100000
   online_steps: 0
-  eval_freq: 20000
-  save_freq: 20000
+  eval_freq: 200
+  save_freq: 200
   save_checkpoint: true
 
-  batch_size: 16
-  lr: 1.414e-5
-  lr_backbone: 1.414e-5
+  batch_size: 8
+  lr: 1e-5
+  lr_backbone: 1e-5
   lr_scheduler: cosine
   lr_warmup_steps: 500
   weight_decay: 1e-4
@@ -39,11 +39,11 @@ policy:
   # Input / output structure.
   n_obs_steps: 1
   chunk_size: 100 # chunk_size
-  n_action_steps: 100
+  n_action_steps: 50
 
   input_shapes:
     # TODO(rcadene, alexander-soare): add variables for height and width from the dataset/env?
-    observation.images.top: [3, 480, 640]
+    observation.images.top: [3, 240, 320]
     observation.state: ["${env.state_dim}"]
   output_shapes:
     action: ["${env.action_dim}"]
@@ -90,5 +90,5 @@ policy:
   clip_sample_range: 1.0
 
   # Inference
-  num_inference_steps: 50  # if not provided, defaults to `num_train_timesteps`
+  num_inference_steps: 15  # if not provided, defaults to `num_train_timesteps`
 

@@ -121,7 +121,7 @@ class ACTDiffusionPolicy(
         # querying the policy.
         if len(self._action_queue) == 0:
             # actions = self.model(batch)[0][:, : self.config.n_action_steps]
-            actions = self.model.generate_actions(batch)[0]
+            actions = self.model.generate_actions(batch)
 
             # TODO(rcadene): make _forward return output dictionary?
             actions = self.unnormalize_outputs({"action": actions})["action"]
@@ -342,7 +342,7 @@ class ACT(nn.Module):
  
 
     def decoding(self, action: Tensor, encoder_out: Tensor, encoder_in_pos_embed: Tensor) -> tuple[Tensor, tuple[Tensor, Tensor] | tuple[None, None]]:
-        # move to (Chunk size, Batch_size, Channel_size)
+        # change to (Chunk size, Batch_size, Channel_size)
         action = action.transpose(0,1)
         decoder_in = self.action_input_project(action)
         decoder_out = self.decoder(
@@ -438,7 +438,7 @@ class ACT(nn.Module):
 
         # Sample prior.
         sample = torch.randn(
-            size=(self.config.chunk_size, batch_size, self.config.output_shapes["action"][0]),
+            size=(batch_size, self.config.chunk_size, self.config.output_shapes["action"][0]),
             dtype=dtype,
             device=device,
             generator=generator,
