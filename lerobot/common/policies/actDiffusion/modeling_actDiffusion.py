@@ -26,6 +26,7 @@ from typing import Callable
 
 import einops
 import numpy as np
+from typing import List
 import torch
 import torch.nn.functional as F  # noqa: N812
 import torchvision
@@ -221,7 +222,7 @@ class ACT(nn.Module):
         # Transformer (acts as VAE decoder when training with the variational objective).
         self.encoder = ACTEncoder(config)
         self.decoder = ACTDecoder(config)
-        self.timestep_embedder = TimestepEmbedder(self.noise_scheduler.config.num_train_timesteps, config.dim_model)
+        self.timestep_embedder = TimestepEmbeddingGenerator(config.num_train_timesteps, config.dim_model)
 
         # Transformer encoder input projections. The tokens will be structured like
         # [latent, (robot_state), (env_state), (image_feature_map_pixels)].
@@ -250,13 +251,13 @@ class ACT(nn.Module):
 
         # Transformer decoder.
         # Learnable positional embedding for the transformer's decoder (in the style of DETR object queries).
-        # self.decoder_pos_embed = nn.Embedding(config.chunk_size, config.dim_model)
         self.decoder_pos_embed = ACTSinusoidalPositionEmbedding1d(config.dim_model)
         # linear projection for actions in decoder
         self.action_input_project = nn.Linear(config.output_shapes["action"][0], config.dim_model)
         # Final action regression head on the output of the transformer's decoder.
         self.action_head = nn.Linear(config.dim_model, config.output_shapes["action"][0])
-
+        # pos embedding on one-hot time encoding
+        self.timestep_embed_generator = TimestepEmbeddingGenerator(config.num_train_timesteps, config.dim_model)
         self.noise_scheduler = _make_noise_scheduler(
             config.noise_scheduler_type,
             num_train_timesteps=config.num_train_timesteps,
@@ -269,7 +270,7 @@ class ACT(nn.Module):
         )
 
         if config.num_inference_steps is None:
-            self.num_inference_steps = self.noise_scheduler.config.num_train_timesteps
+            self.num_inference_steps = config.num_train_timesteps
         else:
             self.num_inference_steps = config.num_inference_steps
 
@@ -296,7 +297,7 @@ class ACT(nn.Module):
         }
 
         Returns:
-            (Batch, chunk_size, dim_model) batch of encoder embeddings and the positional embedding
+            (chunk_size, Batch, dim_model) batch of encoder embeddings and the positional embedding
         """
                 # When not using the VAE encoder, we set the latent to be all zeros.
         mu = log_sigma_x2 = None
@@ -343,11 +344,10 @@ class ACT(nn.Module):
         return encoder_out, encoder_in_pos_embed
  
 
-    def decoding(self, action: Tensor, encoder_out: Tensor, encoder_in_pos_embed: Tensor,
-                  time_encoder: Tensor) -> tuple[Tensor, tuple[Tensor, Tensor] | tuple[None, None]]:
+    def decoding(self, action: Tensor, encoder_out: Tensor, timestep_embed: Tensor, encoder_in_pos_embed: Tensor,
+                  ) -> tuple[Tensor, tuple[Tensor, Tensor] | tuple[None, None]]:
         # change to (Chunk size, Batch_size, Channel_size)
         action = action.transpose(0,1)
-        timestep_embed = self.timestep_embedder(time_encoder)
         decoder_in = self.action_input_project(action)
         decoder_out = self.decoder(
             decoder_in,
@@ -396,10 +396,10 @@ class ACT(nn.Module):
         )
         # Add noise to the clean trajectories according to the noise magnitude at each timestep.
         noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
-        onehot_timestep = generate_one_hot_timesteps(timesteps,self.noise_scheduler.config.num_train_timesteps)
+        timestep_embed = self.timestep_embed_generator.create_timestep_embedding(timesteps)
         # prediction throught encoding and decoding
         encoder_out, encoder_in_pos_embed = self.encoding(batch)
-        pred = self.decoding(noisy_trajectory, encoder_out, onehot_timestep, encoder_in_pos_embed)
+        pred = self.decoding(noisy_trajectory, encoder_out, timestep_embed, encoder_in_pos_embed)
 
         # Compute the loss.
         # The target is either the original trajectory, or the noise.
@@ -458,8 +458,8 @@ class ACT(nn.Module):
                                    dtype=dtype, 
                                    device=device)
             timesteps = timesteps * t
-            onehot_timestep = generate_one_hot_timesteps(timesteps,self.noise_scheduler.config.num_train_timesteps)
-            model_output = self.decoding(sample, encoder_out, onehot_timestep, encoder_in_pos_embed)
+            timestep_embed = self.timestep_embed_generator.create_timestep_embedding(timesteps)
+            model_output = self.decoding(sample, encoder_out, timestep_embed, encoder_in_pos_embed)
             # Compute previous image: x_t -> x_t-1
             sample = self.noise_scheduler.step(model_output, t, sample, generator=generator).prev_sample
 
@@ -553,8 +553,6 @@ class ACTDecoderLayer(nn.Module):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
         self.multihead_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
-        self.multihead_time_attn = CrossAttentionWithTimestep(config.dim_model, config.n_heads, dropout=config.dropout)
-        self.linear_out = nn.Linear(config.dim_model * 2, config.dim_model)
         # Feed forward layers.
         self.linear1 = nn.Linear(config.dim_model, config.dim_feedforward)
         self.dropout = nn.Dropout(config.dropout)
@@ -603,17 +601,13 @@ class ACTDecoderLayer(nn.Module):
         else:
             x = self.norm1(x)
             skip = x
-        x_1 = self.multihead_attn(
+        input_1 = torch.concat((self.maybe_add_pos_embed(encoder_out, encoder_pos_embed),timestep_embed), dim=0)
+        input_2 = torch.concat((encoder_out,timestep_embed), dim=0)
+        x = self.multihead_attn(
             query=self.maybe_add_pos_embed(x, decoder_pos_embed),
-            key=self.maybe_add_pos_embed(encoder_out, encoder_pos_embed),
-            value=encoder_out,
+            key=input_1,
+            value=input_2,
         )[0]  # select just the output, not the attention weights
-        x_2 = self.multihead_time_attn(
-            query=self.maybe_add_pos_embed(x, decoder_pos_embed),
-            timestep_embed = timestep_embed
-        )
-        combined = torch.cat((x_1, x_2), dim=-1)
-        x = self.linear_out(combined)
         x = skip + self.dropout2(x)
         if self.pre_norm:
             skip = x
@@ -627,59 +621,60 @@ class ACTDecoderLayer(nn.Module):
             x = self.norm3(x)
         return x
 
+class TimestepEmbeddingGenerator:
+    def __init__(self, num_timesteps: int, dim_model: int):
+        self.num_timesteps = num_timesteps
+        self.dim_model = dim_model
 
-def create_sinusoidal_pos_embedding(num_positions: int, dimension: int) -> Tensor:
-    """1D sinusoidal positional embeddings as in Attention is All You Need.
+    def generate_one_hot_timesteps(self, timesteps: torch.Tensor) -> torch.Tensor:
+        """
+        Generate one-hot encoded tensor for timesteps.
+        
+        Args:
+            timesteps (Tensor): 1D tensor of shape (batch_size,) containing timestep indices.
+        
+        Returns:
+            Tensor: One-hot encoded tensor of shape (batch_size, num_timesteps).
+        """
+        batch_size = timesteps.shape[0]
+        one_hot = torch.zeros(batch_size, self.num_timesteps, device=timesteps.device)
+        one_hot.scatter_(1, timesteps.unsqueeze(1), 1)
+        return one_hot
 
-    Args:
-        num_positions: Number of token positions required.
-    Returns: (num_positions, dimension) position embeddings (the first dimension is the batch dimension).
+    def create_timestep_embedding(self, timesteps: torch.Tensor) -> torch.Tensor:
+        """
+        Create sinusoidal positional embeddings for the given timesteps.
+        
+        Args:
+            timesteps (Tensor): 1D tensor of shape (batch_size,) containing timestep indices.
+        
+        Returns:
+            Tensor: Sinusoidal positional embeddings of shape (1, batch_size, dim_model).
+        """
+        onehot_timestep = self.generate_one_hot_timesteps(timesteps)
+        timestep_indices = torch.argmax(onehot_timestep, dim=1)
+        timestep_indices = timestep_indices.detach().cpu().numpy()
+        timestep_embed = self.create_sinusoidal_pos_embedding_for_timestep(timestep_indices)
+        timestep_embed = timestep_embed.unsqueeze(0).to(timesteps.device)
+        return timestep_embed
 
-    """
+    def create_sinusoidal_pos_embedding_for_timestep(self, positions: np.ndarray) -> torch.Tensor:
+        """
+        Generate sinusoidal positional embeddings for given positions.
+        
+        Args:
+            positions: Array of positions for which to generate embeddings.
+        
+        Returns:
+            Tensor: Sinusoidal positional embeddings.
+        """
+        def get_position_angle_vec(position):
+            return [position / np.power(10000, 2 * (hid_j // 2) / self.dim_model) for hid_j in range(self.dim_model)]
 
-    def get_position_angle_vec(position):
-        return [position / np.power(10000, 2 * (hid_j // 2) / dimension) for hid_j in range(dimension)]
-
-    sinusoid_table = np.array([get_position_angle_vec(pos_i) for pos_i in range(num_positions)])
-    sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2])  # dim 2i
-    sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1
-    return torch.from_numpy(sinusoid_table).float()
-
-
-def generate_one_hot_timesteps(timesteps: Tensor, num_timesteps: int) -> Tensor:
-    """
-    Generate one-hot encoded tensor for timesteps.
-    
-    Args:
-        timesteps (Tensor): 1D tensor of shape (batch_size,) containing timestep indices
-        num_timesteps (int): Total number of possible timesteps
-    
-    Returns:
-        Tensor: One-hot encoded tensor of shape (batch_size, num_timesteps)
-    """
-    batch_size = timesteps.shape[0]
-    one_hot = torch.zeros(batch_size, num_timesteps, device=timesteps.device)
-    one_hot.scatter_(1, timesteps.unsqueeze(1), 1)
-    return one_hot
-
-class TimestepEmbedder(nn.Module):
-    def __init__(self, num_timesteps: int, d_model: int):
-        super().__init__()
-        self.embed = nn.Embedding(num_timesteps, d_model)
-
-    def forward(self, t: Tensor) -> Tensor:
-        return self.embed(t)
-    
-
-class CrossAttentionWithTimestep(nn.Module):
-    def __init__(self, d_model: int, n_heads: int):
-        super().__init__()
-        self.multihead_attn = nn.MultiheadAttention(d_model, n_heads)
-
-    def forward(self, query: Tensor, timestep_embed: Tensor) -> Tensor:
-        # Add timestep embedding to key and value
-        attn_output, _ = self.multihead_attn(query, timestep_embed, timestep_embed)
-        return attn_output
+        sinusoid_table = np.array([get_position_angle_vec(pos) for pos in positions])
+        sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2])  # dim 2i
+        sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1
+        return torch.from_numpy(sinusoid_table).float()
 
 
 class ACTSinusoidalPositionEmbedding1d(nn.Module):
