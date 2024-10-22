@@ -455,7 +455,7 @@ class ACT(nn.Module):
         for t in self.noise_scheduler.timesteps:
             # Predict model output.
             timesteps = torch.ones(size=(sample.shape[0],),
-                                   dtype=dtype, 
+                                   dtype=torch.int, 
                                    device=device)
             timesteps = timesteps * t
             timestep_embed = self.timestep_embed_generator.create_timestep_embedding(timesteps)
