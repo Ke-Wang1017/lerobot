@@ -116,8 +116,12 @@ def make_optimizer_and_scheduler(cfg, policy):
                 "lr": cfg.training.lr_backbone,
             },
         ]
-        optimizer = torch.optim.AdamW(
-            optimizer_params_dicts, lr=cfg.training.lr, weight_decay=cfg.training.weight_decay
+        optimizer = torch.optim.Adam(
+            optimizer_params_dicts,
+            cfg.training.lr,
+            cfg.training.adam_betas,
+            cfg.training.adam_eps,
+            cfg.training.adam_weight_decay,
         )
 
         from diffusers.optimization import get_scheduler

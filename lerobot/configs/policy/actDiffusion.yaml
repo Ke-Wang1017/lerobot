@@ -16,13 +16,16 @@ training:
   save_freq: 200
   save_checkpoint: true
 
-  batch_size: 8
-  lr: 1e-5
-  lr_backbone: 1e-5
+  batch_size: 64
+  lr: 2.83e-5
+  lr_backbone: 2.83e-5
   lr_scheduler: cosine
   lr_warmup_steps: 500
   weight_decay: 1e-4
   grad_clip_norm: 10
+  adam_betas: [0.95, 0.999]
+  adam_eps: 1.0e-8
+  adam_weight_decay: 1.0e-6
   online_steps_between_rollouts: 1
 
   delta_timestamps:

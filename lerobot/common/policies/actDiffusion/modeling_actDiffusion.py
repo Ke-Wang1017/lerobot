@@ -251,7 +251,7 @@ class ACT(nn.Module):
 
         # Transformer decoder.
         # Learnable positional embedding for the transformer's decoder (in the style of DETR object queries).
-        self.decoder_pos_embed = ACTSinusoidalPositionEmbedding1d(config.dim_model)
+        self.decoder_pos_embed = nn.Embedding(config.chunk_size, config.dim_model) #ACTSinusoidalPositionEmbedding1d(config.dim_model)
         # linear projection for actions in decoder
         self.action_input_project = nn.Linear(config.output_shapes["action"][0], config.dim_model)
         # Final action regression head on the output of the transformer's decoder.
@@ -307,7 +307,7 @@ class ACT(nn.Module):
         encoder_in_pos_embed = list(self.encoder_1d_feature_pos_embed.weight.unsqueeze(1))
         # Robot state token.
         if self.use_robot_state:
-            encoder_in_tokens.append(self.encoder_robot_state_input_proj(batch["observation.state"]))
+            encoder_in_tokens.append(self.encoder_robot_state_input_proj(batch["observation.state"].squeeze()))
         # Environment state token.
         if self.use_env_state:
             encoder_in_tokens.append(
@@ -320,7 +320,7 @@ class ACT(nn.Module):
             all_cam_pos_embeds = []
 
             for cam_index in range(batch["observation.images"].shape[-4]):
-                cam_features = self.backbone(batch["observation.images"][:, cam_index])["feature_map"]
+                cam_features = self.backbone(batch["observation.images"][:, cam_index].squeeze())["feature_map"]
                 # TODO(rcadene, alexander-soare): remove call to `.to` to speedup forward ; precompute and use
                 # buffer
                 cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_features).to(dtype=cam_features.dtype)
@@ -354,7 +354,7 @@ class ACT(nn.Module):
             encoder_out,
             timestep_embed,
             encoder_pos_embed=encoder_in_pos_embed,
-            decoder_pos_embed=self.decoder_pos_embed(decoder_in).to(dtype=action.dtype),
+            decoder_pos_embed=self.decoder_pos_embed.weight.unsqueeze(1),
         )
 
         # Move back to (B, S, C).
@@ -455,7 +455,7 @@ class ACT(nn.Module):
         for t in self.noise_scheduler.timesteps:
             # Predict model output.
             timesteps = torch.ones(size=(sample.shape[0],),
-                                   dtype=torch.int, 
+                                   dtype=torch.int64, 
                                    device=device)
             timesteps = timesteps * t
             timestep_embed = self.timestep_embed_generator.create_timestep_embedding(timesteps)
