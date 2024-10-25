@@ -625,6 +625,7 @@ class TimestepEmbeddingGenerator:
     def __init__(self, num_timesteps: int, dim_model: int):
         self.num_timesteps = num_timesteps
         self.dim_model = dim_model
+        self.embedding = nn.Embedding(num_timesteps, dim_model)
 
     def generate_one_hot_timesteps(self, timesteps: torch.Tensor) -> torch.Tensor:
         """
@@ -651,12 +652,19 @@ class TimestepEmbeddingGenerator:
         Returns:
             Tensor: Sinusoidal positional embeddings of shape (1, batch_size, dim_model).
         """
-        onehot_timestep = self.generate_one_hot_timesteps(timesteps)
-        timestep_indices = torch.argmax(onehot_timestep, dim=1)
-        timestep_indices = timestep_indices.detach().cpu().numpy()
-        timestep_embed = self.create_sinusoidal_pos_embedding_for_timestep(timestep_indices)
-        timestep_embed = timestep_embed.unsqueeze(0).to(timesteps.device)
+        # onehot_timestep = self.generate_one_hot_timesteps(timesteps).long().to(timesteps.device)
+        # onehot_timestep = onehot_timestep.detach().cpu().numpy()
+        # onehot_timestep = torch.from_numpy(onehot_timestep).long()
+        self.embedding.to(timesteps.device)
+        timestep_embed = self.embedding(timesteps)
+        timestep_embed = timestep_embed.repeat(8, 1, 1)  
         return timestep_embed
+        # return timestep_embed
+        # timestep_indices = torch.argmax(onehot_timestep, dim=1)
+        # timestep_indices = timestep_indices.detach().cpu().numpy()
+        # timestep_embed = self.create_sinusoidal_pos_embedding_for_timestep(timestep_indices)
+        # timestep_embed = timestep_embed.unsqueeze(0).to(timesteps.device)
+        # return timestep_embed
 
     def create_sinusoidal_pos_embedding_for_timestep(self, positions: np.ndarray) -> torch.Tensor:
         """
