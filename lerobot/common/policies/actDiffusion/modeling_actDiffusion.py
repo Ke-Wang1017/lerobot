@@ -251,7 +251,7 @@ class ACT(nn.Module):
 
         # Transformer decoder.
         # Learnable positional embedding for the transformer's decoder (in the style of DETR object queries).
-        self.decoder_pos_embed = nn.Embedding(config.chunk_size, config.dim_model) #ACTSinusoidalPositionEmbedding1d(config.dim_model)
+        self.decoder_pos_embed = nn.Embedding(config.chunk_size, config.dim_model) 
         # linear projection for actions in decoder
         self.action_input_project = nn.Linear(config.output_shapes["action"][0], config.dim_model)
         # Final action regression head on the output of the transformer's decoder.
@@ -626,6 +626,12 @@ class TimestepEmbeddingGenerator:
         self.num_timesteps = num_timesteps
         self.dim_model = dim_model
         self.embedding = nn.Embedding(num_timesteps, dim_model)
+        self.timestep_encode = nn.Sequential(
+            SinusoidalPosEmb(self.dim_model),
+            nn.Linear(self.dim_model, self.dim_model * 4),
+            nn.Mish(),
+            nn.Linear(self.dim_model * 4, self.dim_model),
+        )
 
     def generate_one_hot_timesteps(self, timesteps: torch.Tensor) -> torch.Tensor:
         """
@@ -652,20 +658,24 @@ class TimestepEmbeddingGenerator:
         Returns:
             Tensor: Sinusoidal positional embeddings of shape (1, batch_size, dim_model).
         """
+        # learned embeddings
+        # self.embedding.to(timesteps.device)
+        # timestep_embed = self.embedding(timesteps)
+        # timestep_embed = timestep_embed.repeat(8, 1, 1)  
+        # return timestep_embed
+        #sin pos embedding
         # onehot_timestep = self.generate_one_hot_timesteps(timesteps).long().to(timesteps.device)
         # onehot_timestep = onehot_timestep.detach().cpu().numpy()
         # onehot_timestep = torch.from_numpy(onehot_timestep).long()
-        self.embedding.to(timesteps.device)
-        timestep_embed = self.embedding(timesteps)
-        timestep_embed = timestep_embed.repeat(8, 1, 1)  
-        return timestep_embed
-        # return timestep_embed
         # timestep_indices = torch.argmax(onehot_timestep, dim=1)
         # timestep_indices = timestep_indices.detach().cpu().numpy()
         # timestep_embed = self.create_sinusoidal_pos_embedding_for_timestep(timestep_indices)
         # timestep_embed = timestep_embed.unsqueeze(0).to(timesteps.device)
         # return timestep_embed
-
+        # sin pos + MLP
+        self.timestep_encode.to(timesteps.device)
+        return self.timestep_encode(timesteps).unsqueeze(0)
+    
     def create_sinusoidal_pos_embedding_for_timestep(self, positions: np.ndarray) -> torch.Tensor:
         """
         Generate sinusoidal positional embeddings for given positions.
@@ -685,28 +695,19 @@ class TimestepEmbeddingGenerator:
         return torch.from_numpy(sinusoid_table).float()
 
 
-class ACTSinusoidalPositionEmbedding1d(nn.Module):
-    """1D sinusoidal positional embeddings as in Attention is All You Need."""
-    
-    def __init__(self, d_model: int, max_len: int = 5000):
+class SinusoidalPosEmb(nn.Module):
+    def __init__(self, dim):
         super().__init__()
-        
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        
-        pe = torch.zeros(max_len, 1, d_model)
-        pe[:, 0, 0::2] = torch.sin(position * div_term)
-        pe[:, 0, 1::2] = torch.cos(position * div_term)
-        
-        self.register_buffer('pe', pe)
+        self.dim = dim
 
-    def forward(self, x: Tensor) -> Tensor:
-        """
-        Args:
-            x: Tensor, shape [seq_len, batch_size, embedding_dim]
-            return: Tensor, shape [seq_len, 1, embedding_dim]
-        """
-        return self.pe[:x.size(0)]
+    def forward(self, x):
+        device = x.device
+        half_dim = self.dim // 2
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
+        emb = x[:, None] * emb[None, :]
+        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
+        return emb
     
 
 class ACTSinusoidalPositionEmbedding2d(nn.Module):

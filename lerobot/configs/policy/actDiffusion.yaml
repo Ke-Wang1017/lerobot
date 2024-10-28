@@ -12,16 +12,16 @@ override_dataset_stats:
 training:
   offline_steps: 100000
   online_steps: 0
-  eval_freq: 200
-  save_freq: 200
+  eval_freq: -1
+  save_freq: 2000
   save_checkpoint: true
 
   batch_size: 64
   lr: 2.83e-5
   lr_backbone: 2.83e-5
   lr_scheduler: cosine
-  lr_warmup_steps: 500
-  weight_decay: 1e-4
+  lr_warmup_steps: 5000
+  weight_decay: 2e-5
   grad_clip_norm: 10
   adam_betas: [0.95, 0.999]
   adam_eps: 1.0e-8
