@@ -590,11 +590,11 @@ class ACTDecoderLayer(nn.Module):
             (DS, B, C) tensor of decoder output features.
         """
         skip = x
-        if self.pre_norm:
-            x = self.norm1(x)
-        q = k = self.maybe_add_pos_embed(x, decoder_pos_embed)
-        x = self.self_attn(q, k, value=x)[0]  # select just the output, not the attention weights
-        x = skip + self.dropout1(x)
+        # if self.pre_norm:
+        #     x = self.norm1(x)
+        # q = k = self.maybe_add_pos_embed(x, decoder_pos_embed)
+        # x = self.self_attn(q, k, value=x)[0]  # select just the output, not the attention weights
+        # x = skip + self.dropout1(x)
         if self.pre_norm:
             skip = x
             x = self.norm2(x)
