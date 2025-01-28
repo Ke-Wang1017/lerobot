@@ -63,7 +63,7 @@ policy:
     observation.images.top: [3, 128, 128]
     # observation.image: [3, 128, 128]
   output_shapes:
-    action: [3] # ["${env.action_dim}"]
+    action: [2] # ["${env.action_dim}"]
 
   # Normalization / Unnormalization
   input_normalization_modes:

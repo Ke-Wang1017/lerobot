@@ -448,7 +448,7 @@ if __name__ == "__main__":
     parser_teleop.add_argument(
         "--display-cameras",
         type=int,
-        default=1,
+        default=0,
         help="Display all cameras on screen (set to 1 to display or 0).",
     )
 

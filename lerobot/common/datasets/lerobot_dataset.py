@@ -873,6 +873,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
     def _save_episode_table(self, episode_buffer: dict, episode_index: int) -> None:
         episode_dict = {key: episode_buffer[key] for key in self.hf_features}
+        for key in episode_buffer:
+            print(f"Data for key {key}:", np.array(episode_buffer[key]).shape)
+            print(f"Expected shape:", self.features[key]['shape'])
+            print(f"Expected dtype:", self.features[key]['dtype'])
         ep_dataset = datasets.Dataset.from_dict(
             episode_dict, features=self.hf_features, split="train"
         )
