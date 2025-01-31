@@ -211,8 +211,8 @@ class PiperRobot(ManipulatorRobot):
         state = state["state"]
         state[3:6] = self.euler_filter.rectify(state[3:6])
         # get relative action from joystick
-        action = self.teleop.action(state)
-        action[:6] += state[:6]
+        delta_action = self.teleop.action(state)
+        action = state[:6] + delta_action[:6]
         if self.teleop.home:
             self.move_to_home_2()
 
@@ -229,7 +229,7 @@ class PiperRobot(ManipulatorRobot):
             return
 
         state = torch.as_tensor(state)
-        action = torch.as_tensor(action)
+        action = torch.as_tensor(delta_action)
 
         # Capture images from cameras
         images = {}
