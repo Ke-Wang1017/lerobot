@@ -61,8 +61,8 @@ class JoystickInterface:
                 'ABS_Y': -0.005,
                 'ABS_RX': 0.015,
                 'ABS_RY': 0.015,
-                'ABS_Z': 0.005,
-                'ABS_RZ': 0.005,
+                'ABS_Z': 0.0025,
+                'ABS_RZ': 0.0025,
                 'ABS_HAT0X': 0.03,
             }
         ),

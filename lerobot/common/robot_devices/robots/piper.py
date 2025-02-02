@@ -212,7 +212,8 @@ class PiperRobot(ManipulatorRobot):
         state[3:6] = self.euler_filter.rectify(state[3:6])
         # get relative action from joystick
         delta_action = self.teleop.action(state)
-        action = state[:6] + delta_action[:6]
+        action = delta_action
+        action[:6] += state[:6]
         if self.teleop.home:
             self.move_to_home_2()
 
@@ -268,7 +269,8 @@ class PiperRobot(ManipulatorRobot):
         if self.state_keys is None:
             self.state_keys = list(state)
 
-        state = torch.as_tensor(list(state.values()))
+        state = torch.as_tensor(list(state.values())).type(torch.float32)
+        state = state.squeeze(0)
 
         # Capture images from cameras
         images = {}
@@ -278,7 +280,6 @@ class PiperRobot(ManipulatorRobot):
             images[name] = torch.from_numpy(images[name])
             self.logs[f"read_camera_{name}_dt_s"] = self.cameras[name].logs["delta_timestamp_s"]
             self.logs[f"async_read_camera_{name}_dt_s"] = time.perf_counter() - before_camread_t
-
         # Populate output dictionnaries
         obs_dict = {}
         obs_dict["observation.state"] = state
