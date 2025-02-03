@@ -163,11 +163,11 @@ class PiperRobot(ManipulatorRobot):
         while True:
             if(count == 0):
                 print("1-----------")
-                action = [0.07,0,0.22,0,0.08,0,0]
-            elif(count == 300):
+                action = [0.07,0,0.22,0,0.08,0,0.08]
+            elif(count == 400):
                 print("2-----------")
                 action = [0.15,0.0,0.35,0.08,0.08,0.075,0.0] # 0.08 is maximum gripper position
-            elif(count == 600):
+            elif(count == 800):
                 print("3-----------")
                 action = [0.200337, 0.020786, 0.289284, 0.179831, 0.010918, 0.173467, 0.0]
             count += 1
