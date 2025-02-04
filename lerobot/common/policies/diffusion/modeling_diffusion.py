@@ -157,17 +157,18 @@ class DiffusionPolicy(
         return {"loss": loss}
 
 
-def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMScheduler:
+def _make_noise_scheduler(config: DiffusionConfig) :
     """
     Factory for noise scheduler instances of the requested type. All kwargs are passed
     to the scheduler.
     """
-    if name == "DDPM":
-        return DDPMScheduler(**kwargs)
-    elif name == "DDIM":
-        return DDIMScheduler(**kwargs)
-    else:
-        raise ValueError(f"Unsupported noise scheduler type {name}")
+    from torch.distributions import Beta
+    # Noise scheduler setup
+    beta_alpha = config.get('beta_alpha', 1.5)
+    beta_beta = config.get('beta_beta', 1.0)
+    s = config.get('s', 0.999)
+    beta_dist = Beta(beta_alpha, beta_beta)
+    return beta_dist, s
 
 
 class DiffusionModel(nn.Module):
@@ -195,16 +196,7 @@ class DiffusionModel(nn.Module):
 
         self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps)
 
-        self.noise_scheduler = _make_noise_scheduler(
-            config.noise_scheduler_type,
-            num_train_timesteps=config.num_train_timesteps,
-            beta_start=config.beta_start,
-            beta_end=config.beta_end,
-            beta_schedule=config.beta_schedule,
-            clip_sample=config.clip_sample,
-            clip_sample_range=config.clip_sample_range,
-            prediction_type=config.prediction_type,
-        )
+        self.beta_dist, self.s = _make_noise_scheduler(config)
 
         if config.num_inference_steps is None:
             self.num_inference_steps = self.noise_scheduler.config.num_train_timesteps
@@ -219,12 +211,8 @@ class DiffusionModel(nn.Module):
         dtype = get_dtype_from_parameters(self)
 
         # Sample prior.
-        sample = torch.randn(
-            size=(batch_size, self.config.horizon, self.config.output_shapes["action"][0]),
-            dtype=dtype,
-            device=device,
-            generator=generator,
-        )
+        sample = self.beta_dist.sample([batch_size]).to(device=device, dtype=dtype)
+        time = (self.s - sample) / self.s
 
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
 
