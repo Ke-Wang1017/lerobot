@@ -4,18 +4,27 @@ from lerobot.common.robot_devices.robots.piper import PiperRobot
 from lerobot.common.robot_devices.utils import busy_wait
 import time
 import torch
+from lerobot.common.robot_devices.robots.factory import make_robot
+from lerobot.common.utils.utils import init_hydra_config
 
 inference_time_s = 60
+warmup_time_s = 3
 fps = 30
 device = "cuda"  # TODO: On Mac, use "mps" or "cpu"
 
-ckpt_path = "outputs/train/act_koch_test/checkpoints/last/pretrained_model"
-policy = ACTPolicy.from_pretrained(ckpt_path)
+ckpt_path = "lerobot/policy/piper_real_1/pretrained_model"
+# ckpt_path = "outputs/train/2025-02-02/23-39-04_real_world_act_default/checkpoints/060000/pretrained_model"
+policy = DiffusionPolicy.from_pretrained(ckpt_path, local_files_only=False)
+# policy = ACTPolicy.from_pretrained(ckpt_path, local_files_only=False)
 policy.to(device)
-
-for _ in range(inference_time_s * fps):
+robot_config_path = 'lerobot/configs/robot/piper.yaml'
+robot_cfg = init_hydra_config(robot_config_path)
+robot = make_robot(robot_cfg)
+robot.connect()
+# give time to prepare recording
+breakpoint()
+for i in range(inference_time_s * fps):
     start_time = time.perf_counter()
-    robot = PiperRobot()
 
     # Read the follower state and access the frames from the cameras
     observation = robot.capture_observation()
@@ -28,16 +37,18 @@ for _ in range(inference_time_s * fps):
             observation[name] = observation[name].permute(2, 0, 1).contiguous()
         observation[name] = observation[name].unsqueeze(0)
         observation[name] = observation[name].to(device)
-
     # Compute the next action with the policy
-    # based on the current observation
-    action = policy.select_action(observation)
-    # Remove batch dimension
-    action = action.squeeze(0)
-    # Move to cpu, if not already the case
-    action = action.to("cpu")
-    # Order the robot to move
-    robot.send_action(action)
+    if i >= warmup_time_s * fps:
+        # based on the current observation
+        action = policy.select_action(observation)
+        # Remove batch dimension
+        action = action.squeeze(0)
+        # Move to cpu, if not already the case
+        action = action.to("cpu")
+        # breakpoint()
+        # Order the robot to move
+        robot.send_action(action)
 
     dt_s = time.perf_counter() - start_time
+    print(f"dt_s: {dt_s}")
     busy_wait(1 / fps - dt_s)
