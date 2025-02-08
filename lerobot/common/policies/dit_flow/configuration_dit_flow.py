@@ -143,6 +143,7 @@ class DiTFlowConfig(PreTrainedConfig):
     do_mask_loss_for_padding: bool = False
 
     # Training presets
+    optimizer: str ="sgd"
     optimizer_lr: float = 1e-4
     optimizer_betas: tuple = (0.95, 0.999)
     optimizer_eps: float = 1e-8
