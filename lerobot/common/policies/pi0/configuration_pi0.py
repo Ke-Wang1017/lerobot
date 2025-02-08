@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from lerobot.common.optim.optimizers import AdamWConfig
+from lerobot.common.optim.optimizers import AdamWConfig, SGDConfig
 from lerobot.common.optim.schedulers import (
     CosineDecayWithWarmupSchedulerConfig,
 )
@@ -47,7 +47,7 @@ class PI0Config(PreTrainedConfig):
     tokenizer_max_length: int = 48
 
     # Projector
-    proj_width: int = 1024
+    proj_width: int = 512
 
     # Decoding
     num_steps: int = 10
@@ -58,13 +58,20 @@ class PI0Config(PreTrainedConfig):
 
     # Finetuning settings
     freeze_vision_encoder: bool = True
-    train_expert_only: bool = False
+    train_expert_only: bool = True
     train_state_proj: bool = True
 
     # Training presets
-    optimizer_lr: float = 2.5e-5
+    # optimizer_type: str = "sgd"
+    # optimizer_lr: float = 2.5e-5
     optimizer_betas: tuple[float, float] = (0.9, 0.95)
     optimizer_eps: float = 1e-8
+    # optimizer_weight_decay: float = 1e-10
+    optimizer_type: str = "sgd"  # Changed from default "adam" to "sgd"
+    optimizer_lr: float = 2.5e-5
+    optimizer_momentum: float = 0.9  # Added for SGD
+    optimizer_dampening: float = 0.0  # Added for SGD
+    optimizer_nesterov: bool = False  # Added for SGD
     optimizer_weight_decay: float = 1e-10
 
     scheduler_warmup_steps: int = 1_000
@@ -105,11 +112,17 @@ class PI0Config(PreTrainedConfig):
             )
             self.input_features[key] = empty_camera
 
-    def get_optimizer_preset(self) -> AdamWConfig:
-        return AdamWConfig(
+    # def get_optimizer_preset(self) -> AdamWConfig:
+    #     return AdamWConfig(
+    #         lr=self.optimizer_lr,
+    #         betas=self.optimizer_betas,
+    #         eps=self.optimizer_eps,
+    #         weight_decay=self.optimizer_weight_decay,
+    #     )
+
+    def get_optimizer_preset(self) -> SGDConfig:
+        return SGDConfig(
             lr=self.optimizer_lr,
-            betas=self.optimizer_betas,
-            eps=self.optimizer_eps,
             weight_decay=self.optimizer_weight_decay,
         )
 

@@ -310,11 +310,20 @@ class PI0Policy(PreTrainedPolicy):
         batch = self.normalize_targets(batch)
 
         images, img_masks = self.prepare_images(batch)
+        for img in images:
+            img = img.to(torch.bfloat16)
+        for img_mask in img_masks:
+            img_mask = img_mask.to(torch.bfloat16)
         state = self.prepare_state(batch)
+        state = state.to(torch.bfloat16)
         lang_tokens, lang_masks = self.prepare_language(batch)
+        for lang_tk in lang_tokens:
+            lang_tk = lang_tk.to(torch.bfloat16)
+        for lang_mask in lang_masks:
+            lang_mask = lang_mask.to(torch.bfloat16)
         actions = self.prepare_action(batch)
         actions_is_pad = batch.get("actions_id_pad")
-
+        actions = actions.to(torch.bfloat16)
         loss_dict = {}
         losses = self.model.forward(images, img_masks, lang_tokens, lang_masks, state, actions, noise, time)
         loss_dict["losses_after_forward"] = losses.clone()
@@ -473,14 +482,14 @@ class PI0FlowMatching(nn.Module):
             attention_implementation=self.config.attention_implementation,
         )
         self.paligemma_with_expert = PaliGemmaWithExpertModel(paligemma_with_export_config)
-
+        self.paligemma_with_expert = self.paligemma_with_expert.to(torch.bfloat16)
         # Projections are float32
-        self.state_proj = nn.Linear(self.config.max_state_dim, self.config.proj_width)
-        self.action_in_proj = nn.Linear(self.config.max_action_dim, self.config.proj_width)
-        self.action_out_proj = nn.Linear(self.config.proj_width, self.config.max_action_dim)
+        self.state_proj = nn.Linear(self.config.max_state_dim, self.config.proj_width).to(torch.bfloat16)
+        self.action_in_proj = nn.Linear(self.config.max_action_dim, self.config.proj_width).to(torch.bfloat16)
+        self.action_out_proj = nn.Linear(self.config.proj_width, self.config.max_action_dim).to(torch.bfloat16)
 
-        self.action_time_mlp_in = nn.Linear(self.config.proj_width * 2, self.config.proj_width)
-        self.action_time_mlp_out = nn.Linear(self.config.proj_width, self.config.proj_width)
+        self.action_time_mlp_in = nn.Linear(self.config.proj_width * 2, self.config.proj_width).to(torch.bfloat16)
+        self.action_time_mlp_out = nn.Linear(self.config.proj_width, self.config.proj_width).to(torch.bfloat16)
 
         self.set_requires_grad()
 
@@ -493,7 +502,7 @@ class PI0FlowMatching(nn.Module):
             mean=0.0,
             std=1.0,
             size=shape,
-            dtype=torch.float32,
+            dtype=torch.bfloat16,
             device=device,
         )
         return noise
@@ -501,7 +510,7 @@ class PI0FlowMatching(nn.Module):
     def sample_time(self, bsize, device):
         time_beta = sample_beta(1.5, 1.0, bsize, device)
         time = time_beta * 0.999 + 0.001
-        return time.to(dtype=torch.float32, device=device)
+        return time.to(dtype=torch.bfloat16, device=device)
 
     def embed_prefix(
         self, images, img_masks, lang_tokens, lang_masks
@@ -643,7 +652,7 @@ class PI0FlowMatching(nn.Module):
         )
         suffix_out = suffix_out[:, -self.config.n_action_steps :]
         # Original openpi code, upcast attention output
-        suffix_out = suffix_out.to(dtype=torch.float32)
+        suffix_out = suffix_out.to(dtype=torch.bfloat16)
         v_t = self.action_out_proj(suffix_out)
 
         losses = F.mse_loss(u_t, v_t, reduction="none")
@@ -675,10 +684,10 @@ class PI0FlowMatching(nn.Module):
         )
 
         dt = -1.0 / self.config.num_steps
-        dt = torch.tensor(dt, dtype=torch.float32, device=device)
+        dt = torch.tensor(dt, dtype=torch.bfloat16, device=device)
 
         x_t = noise
-        time = torch.tensor(1.0, dtype=torch.float32, device=device)
+        time = torch.tensor(1.0, dtype=torch.bfloat16, device=device)
         while time >= -dt / 2:
             expanded_time = time.expand(bsize)
             v_t = self.denoise_step(
@@ -727,6 +736,6 @@ class PI0FlowMatching(nn.Module):
         )
         suffix_out = outputs_embeds[1]
         suffix_out = suffix_out[:, -self.config.n_action_steps :]
-        suffix_out = suffix_out.to(dtype=torch.float32)
+        suffix_out = suffix_out.to(dtype=torch.bfloat16)
         v_t = self.action_out_proj(suffix_out)
         return v_t
