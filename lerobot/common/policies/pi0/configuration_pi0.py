@@ -70,8 +70,6 @@ class PI0Config(PreTrainedConfig):
     optimizer_type: str = "sgd"  # Changed from default "adam" to "sgd"
     optimizer_lr: float = 2.5e-5
     optimizer_momentum: float = 0.9  # Added for SGD
-    optimizer_dampening: float = 0.0  # Added for SGD
-    optimizer_nesterov: bool = False  # Added for SGD
     optimizer_weight_decay: float = 1e-10
 
     scheduler_warmup_steps: int = 1_000
@@ -124,6 +122,7 @@ class PI0Config(PreTrainedConfig):
         return SGDConfig(
             lr=self.optimizer_lr,
             weight_decay=self.optimizer_weight_decay,
+            momentum = self.optimizer_momentum
         )
 
     def get_scheduler_preset(self):
