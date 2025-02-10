@@ -177,7 +177,7 @@ class PiperRobot(ManipulatorRobot):
             state[3:6] = self.euler_filter.rectify(state[3:6])
             self.send_action(action)
             self.rate.sleep(time.perf_counter() - before_write_t)
-            if count > 800:
+            if count > 1000:
                 break
     
     # Used when returning to home after finishing a demo
