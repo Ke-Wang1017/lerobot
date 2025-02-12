@@ -514,3 +514,64 @@ class StretchRobotConfig(RobotConfig):
     )
 
     mock: bool = False
+
+@RobotConfig.register_subclass("piper")
+@dataclass
+class PiperRobotConfig(RobotConfig):
+    # `max_relative_target` limits the magnitude of the relative positional target vector for safety purposes.
+    # Set this to a positive scalar to have the same value for all motors, or a list that is the same length as
+    # the number of motors in your follower arms.
+    max_relative_target: int | None = None
+    calibration_dir: str = ".cache/calibration/piper"
+    leader_arms: dict[str, MotorsBusConfig] = field(
+        default_factory=lambda: {
+            "main": DynamixelMotorsBusConfig(
+                port="",
+                motors={
+                    # name: (index, model)
+                    "x": [1, "xl330-m077"],
+                    "y": [2, "xl330-m077"],
+                    "z": [3, "xl330-m077"],
+                    "roll": [4, "xl330-m077"],
+                    "pitch": [5, "xl330-m077"],
+                    "yaw": [6, "xl330-m077"],
+                    "gripper": [7, "xl330-m077"],
+                },
+            ),
+        }
+    )
+    follower_arms: dict[str, MotorsBusConfig] = field(
+        default_factory=lambda: {
+            "main": DynamixelMotorsBusConfig(
+                port="",
+                motors={
+                    # name: (index, model)
+                    "x": [1, "xl330-m077"],
+                    "y": [2, "xl330-m077"],
+                    "z": [3, "xl330-m077"],
+                    "roll": [4, "xl330-m077"],
+                    "pitch": [5, "xl330-m077"],
+                    "yaw": [6, "xl330-m077"],
+                    "gripper": [7, "xl330-m077"],
+                },
+            ),
+        }
+    )
+    cameras: dict[str, CameraConfig] = field(
+        default_factory=lambda: {
+            "top": OpenCVCameraConfig(
+                camera_index=8,
+                fps=30,
+                width=640,
+                height=480,
+            ),
+            "wrist": IntelRealSenseCameraConfig(
+                name="Intel RealSense D415",
+                fps=30,
+                width=640,
+                height=480,
+            ),
+        }
+    )
+
+    mock: bool = False

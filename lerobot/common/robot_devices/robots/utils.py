@@ -8,7 +8,8 @@ from lerobot.common.robot_devices.robots.configs import (
     MossRobotConfig,
     RobotConfig,
     So100RobotConfig,
-    StretchRobotConfig,
+    # StretchRobotConfig,
+    PiperRobotConfig,
 )
 
 
@@ -43,8 +44,10 @@ def make_robot_config(robot_type: str, **kwargs) -> RobotConfig:
         return MossRobotConfig(**kwargs)
     elif robot_type == "so100":
         return So100RobotConfig(**kwargs)
-    elif robot_type == "stretch":
-        return StretchRobotConfig(**kwargs)
+    # elif robot_type == "stretch":
+    #     return StretchRobotConfig(**kwargs)
+    elif robot_type == "piper":
+        return PiperRobotConfig(**kwargs)
     else:
         raise ValueError(f"Robot type '{robot_type}' is not available.")
 
@@ -54,10 +57,11 @@ def make_robot_from_config(config: RobotConfig):
         from lerobot.common.robot_devices.robots.manipulator import ManipulatorRobot
 
         return ManipulatorRobot(config)
-    else:
-        from lerobot.common.robot_devices.robots.stretch import StretchRobot
+    elif isinstance(config, PiperRobotConfig):
+        from lerobot.common.robot_devices.robots.piper import PiperRobot
 
-        return StretchRobot(config)
+        return PiperRobot(config)
+    
 
 
 def make_robot(robot_type: str, **kwargs) -> Robot:
