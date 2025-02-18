@@ -69,9 +69,9 @@ policy:
     # TODO(rcadene, alexander-soare): add variables for height and width from the dataset/env?
     observation.images.top: [3, 480, 640]
     observation.images.wrist: [3, 480, 640]
-    observation.state: ["${env.state_dim}"]
+    observation.state: [7]
   output_shapes:
-    action: ["${env.action_dim}"]
+    action: [7]
 
   # Normalization / Unnormalization
   input_normalization_modes:
