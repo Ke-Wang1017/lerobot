@@ -12,7 +12,7 @@ warmup_time_s = 3
 fps = 30
 device = "cuda"  # TODO: On Mac, use "mps" or "cpu"
 
-ckpt_path = "lerobot/policy/piper_real_1/pretrained_model"
+ckpt_path = "lerobot/policy/piper_diffusion"
 # ckpt_path = "outputs/train/2025-02-02/23-39-04_real_world_act_default/checkpoints/060000/pretrained_model"
 policy = DiffusionPolicy.from_pretrained(ckpt_path, local_files_only=False)
 # policy = ACTPolicy.from_pretrained(ckpt_path, local_files_only=False)
@@ -21,8 +21,9 @@ robot_config_path = 'lerobot/configs/robot/piper.yaml'
 robot_cfg = init_hydra_config(robot_config_path)
 robot = make_robot(robot_cfg)
 robot.connect()
+default_pos = torch.tensor([0.200337, 0.020786, 0.289284, 0.179831, 0.010918, 0.173467, 0.0])
 # give time to prepare recording
-breakpoint()
+# breakpoint()
 for i in range(inference_time_s * fps):
     start_time = time.perf_counter()
 
@@ -45,6 +46,10 @@ for i in range(inference_time_s * fps):
         action = action.squeeze(0)
         # Move to cpu, if not already the case
         action = action.to("cpu")
+        action[:3] += default_pos[:3]
+        state = robot.get_state()
+        state = state["state"]
+        action[3:6] += state[3:6]
         # breakpoint()
         # Order the robot to move
         robot.send_action(action)

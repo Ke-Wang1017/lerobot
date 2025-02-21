@@ -28,6 +28,8 @@ from lerobot.common.robot_devices.cameras.utils import Camera
 from lerobot.common.robot_devices.robots.manipulator import ManipulatorRobot
 from piper_sdk import *
 
+from datetime import datetime
+from copy import deepcopy
 
 @dataclass
 class PiperRobotConfig:
@@ -52,11 +54,11 @@ class Rate:
 
 def rectify_signal(current, previous):
     """Rectify a single signal value using its previous value"""
-    if abs(current - previous) >= 180000:
+    if abs(current - previous) >= .18:
         if current > previous:
-            current -= 360000
+            current -= .36
         else:
-            current += 360000
+            current += .36
     return current
 
 
@@ -106,6 +108,34 @@ class PiperRobot(ManipulatorRobot):
         self.piper.EnableArm(7)
         self.piper.GripperCtrl(0,1000,0x01, 0)
         self.state_scaling_factor = 1e6 
+        self.default_pos = [0.200337, 0.020786, 0.289284, 0.179831, 0.010918, 0.173467, 0.0]
+        # self.data_rows = []
+        # self.csv_filename = f"arm_poses_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        # Register the signal handler
+        import signal
+        signal.signal(signal.SIGINT, self.signal_handler)
+
+    # Signal handler for graceful shutdown
+    def signal_handler(self, sig, frame):
+        print('\nSaving data and exiting...')
+        import sys
+        # self.save_to_csv()
+        self.disable_robot()
+        sys.exit(0)
+
+    def disable_robot(self):
+        self.piper.DisableArm(7)
+        self.piper.GripperCtrl(0,1000,0x02, 0)
+    # Function to save data to CSV
+    def save_to_csv(self):
+        import csv
+        with open(self.csv_filename, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            # Write header
+            writer.writerow(['Timestamp', 'X', 'Y', 'Z', 'RX', 'RY', 'RZ', 'grippers_angle', 'grippers_effort'])
+            # Write all stored data
+            writer.writerows(self.data_rows)
+        print(f"Data saved to {self.csv_filename}")
 
     def startup_robot(self, piper:C_PiperInterface):
         '''
@@ -167,9 +197,9 @@ class PiperRobot(ManipulatorRobot):
             # elif(count == 400):
             #     print("2-----------")
                 # action = [0.15,0.0,0.35,0.08,0.08,0.025,0.0] # 0.08 is maximum gripper position
-            elif(count == 600):
+            elif(count == 300):
                 print("2-----------")
-                action = [0.200337, 0.020786, 0.289284, 0.179831, 0.010918, 0.173467, 0.0]
+                action = self.default_pos
             count += 1
             before_write_t = time.perf_counter()
             state = self.get_state()
@@ -177,7 +207,7 @@ class PiperRobot(ManipulatorRobot):
             state[3:6] = self.euler_filter.rectify(state[3:6])
             self.send_action(action)
             self.rate.sleep(time.perf_counter() - before_write_t)
-            if count > 1000:
+            if count > 600:
                 break
     
     # Used when returning to home after finishing a demo
@@ -185,9 +215,11 @@ class PiperRobot(ManipulatorRobot):
         count = 0
         while True:
             if count <= 100:
-                action = [0.200337, 0.020786, 0.289284, 0.179831, 0.010918, 0.173467, 0.08]
+                action = self.default_pos
+                action[6] = 0.08
             elif count > 100:
-                action = [0.200337, 0.020786, 0.289284, 0.179831, 0.010918, 0.173467, 0.0]
+                action = self.default_pos
+                action[6] = 0.0
             count += 1
             before_write_t = time.perf_counter()
             state = self.get_state()
@@ -195,7 +227,7 @@ class PiperRobot(ManipulatorRobot):
             state[3:6] = self.euler_filter.rectify(state[3:6])
             self.send_action(action)
             self.rate.sleep(time.perf_counter() - before_write_t)
-            if count > 200:
+            if count > 300:
                 break
 
 
@@ -210,10 +242,22 @@ class PiperRobot(ManipulatorRobot):
         state = self.get_state()
         state = state["state"]
         state[3:6] = self.euler_filter.rectify(state[3:6])
+        # # Store the data
+        # timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+        # self.data_rows.append([
+        #     timestamp,
+        #     state[0],
+        #     state[1],
+        #     state[2],
+        #     state[3],
+        #     state[4],
+        #     state[5],
+        #     state[6],
+        # ])
         # get relative action from joystick
-        delta_action = self.teleop.action(state)
-        action = delta_action
+        action = self.teleop.action(state)
         action[:6] += state[:6]
+
         if self.teleop.home:
             self.move_to_home_2()
 
@@ -228,9 +272,13 @@ class PiperRobot(ManipulatorRobot):
 
         if not record_data:
             return
-
+        action_record = deepcopy(action)
+        action_record[:3] -= self.default_pos[:3]
+        action_record[3:6] -= state[3:6] # just get delta orientation
+        # it has to be done after send_action
+        state[:3] -= self.default_pos[:3]
         state = torch.as_tensor(state)
-        action = torch.as_tensor(delta_action)
+        action = torch.as_tensor(action_record)
 
         # Capture images from cameras
         images = {}
@@ -264,6 +312,7 @@ class PiperRobot(ManipulatorRobot):
         before_read_t = time.perf_counter()
         state = self.get_state()
         state["state"][3:6] = self.euler_filter.rectify(state["state"][3:6])
+        state["state"][:3] -= self.default_pos[:3]
         self.logs["read_pos_dt_s"] = time.perf_counter() - before_read_t
 
         if self.state_keys is None:
