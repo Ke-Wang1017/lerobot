@@ -204,7 +204,8 @@ def record(
     tags: list[str] | None = None,
     num_image_writer_processes: int = 0,
     num_image_writer_threads_per_camera: int = 4,
-    display_cameras: bool = True,
+    # display_cameras: bool = True,
+    display_cameras: bool = False,
     play_sounds: bool = True,
     reset_follower: bool = False,
     record_delta_actions: bool = False,
@@ -319,6 +320,8 @@ def record(
             (recorded_episodes < num_episodes - 1) or events["rerecord_episode"]
         ):
             log_say("Reset the environment", play_sounds)
+            if robot.robot_type == "piper":
+                robot.move_to_home_2()
             if reset_follower:
                 reset_follower_position(robot, initial_position)
             reset_environment(robot, events, reset_time_s)
@@ -421,7 +424,7 @@ if __name__ == "__main__":
     parser_teleop.add_argument(
         "--display-cameras",
         type=int,
-        default=1,
+        default=0,
         help="Display all cameras on screen (set to 1 to display or 0).",
     )
 
