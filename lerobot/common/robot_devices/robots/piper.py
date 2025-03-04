@@ -204,7 +204,7 @@ class PiperRobot(ManipulatorRobot):
             before_write_t = time.perf_counter()
             state = self.get_state()
             state = state["state"]
-            state[3:6] = self.euler_filter.rectify(state[3:6])
+            # state[3:6] = self.euler_filter.rectify(state[3:6])
             self.send_action(action)
             self.rate.sleep(time.perf_counter() - before_write_t)
             if count > 600:
@@ -224,7 +224,7 @@ class PiperRobot(ManipulatorRobot):
             before_write_t = time.perf_counter()
             state = self.get_state()
             state = state["state"]
-            state[3:6] = self.euler_filter.rectify(state[3:6])
+            # state[3:6] = self.euler_filter.rectify(state[3:6])
             self.send_action(action)
             self.rate.sleep(time.perf_counter() - before_write_t)
             if count > 300:
@@ -241,7 +241,7 @@ class PiperRobot(ManipulatorRobot):
         before_read_t = time.perf_counter()
         state = self.get_state()
         state = state["state"]
-        state[3:6] = self.euler_filter.rectify(state[3:6])
+        # state[3:6] = self.euler_filter.rectify(state[3:6])
         # # Store the data
         # timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
         # self.data_rows.append([
@@ -255,8 +255,10 @@ class PiperRobot(ManipulatorRobot):
         #     state[6],
         # ])
         # get relative action from joystick
-        action = self.teleop.action(state)
-        action[:6] += state[:6]
+        action = self.teleop.action()
+        action_record = deepcopy(action)
+        action_record = action_record[:3] + [action_record[-1]]  # Gets first 3 elements and last element
+        action[:3] += state[:3]
 
         if self.teleop.home:
             self.move_to_home_2()
@@ -272,9 +274,7 @@ class PiperRobot(ManipulatorRobot):
 
         if not record_data:
             return
-        action_record = deepcopy(action)
-        action_record[:3] -= self.default_pos[:3]
-        action_record[3:6] -= state[3:6] # just get delta orientation
+        # action_record[3:6] -= state[3:6] # just get delta orientation
         # it has to be done after send_action
         state[:3] -= self.default_pos[:3]
         state = torch.as_tensor(state)
@@ -291,6 +291,7 @@ class PiperRobot(ManipulatorRobot):
         # Populate output dictionnaries
         obs_dict, action_dict = {}, {}
         obs_dict["observation.state"] = state
+        obs_dict["observation.gripper_effort"] = self.get_gripper_effort()
         action_dict["action"] = action
         for name in self.cameras:
             obs_dict[f"observation.images.{name}"] = images[name]
@@ -301,17 +302,25 @@ class PiperRobot(ManipulatorRobot):
         end_effector_pose = self.piper.GetArmEndPoseMsgs()
         gripper_pose = self.piper.GetArmGripperMsgs()
         state = np.array([end_effector_pose.end_pose.X_axis,end_effector_pose.end_pose.Y_axis,end_effector_pose.end_pose.Z_axis
-                    ,end_effector_pose.end_pose.RX_axis,end_effector_pose.end_pose.RY_axis,end_effector_pose.end_pose.RZ_axis
                     ,gripper_pose.gripper_state.grippers_angle])/self.state_scaling_factor
         return {
             "state": state,
         }
 
+    def get_gripper_effort(self) -> float:
+        gripper_pose = self.piper.GetArmGripperMsgs()
+        return gripper_pose.gripper_state.grippers_effort
+    
+    # def get_ee_pos(self) -> list[float]:
+    #     end_effector_pose = self.piper.GetArmEndPoseMsgs()
+    #     gripper_pose = self.piper.GetArmGripperMsgs()
+    #     return [end_effector_pose.end_pose.X_axis,end_effector_pose.end_pose.Y_axis,end_effector_pose.end_pose.Z_axis,gripper_pose.gripper_state.grippers_angle]
+    
     def capture_observation(self) -> dict:
         # TODO(aliberts): return ndarrays instead of torch.Tensors
         before_read_t = time.perf_counter()
         state = self.get_state()
-        state["state"][3:6] = self.euler_filter.rectify(state["state"][3:6])
+        # state["state"][3:6] = self.euler_filter.rectify(state["state"][3:6])
         state["state"][:3] -= self.default_pos[:3]
         self.logs["read_pos_dt_s"] = time.perf_counter() - before_read_t
 
@@ -334,7 +343,7 @@ class PiperRobot(ManipulatorRobot):
         obs_dict["observation.state"] = state
         for name in self.cameras:
             obs_dict[f"observation.images.{name}"] = images[name]
-
+        obs_dict["observation.gripper_effort"] = self.get_gripper_effort()
         return obs_dict
 
     def send_action(self, action: list[float]) -> None:
@@ -345,14 +354,14 @@ class PiperRobot(ManipulatorRobot):
         if isinstance(action, torch.Tensor):
             action = action.tolist()
         # clip rz value to be between -pi/2 and pi/2 for safety
-        action[5] = max(-np.pi/2, min(np.pi/2, action[5]))
+        # action[5] = max(-np.pi/2, min(np.pi/2, action[5]))
         X = round(action[0]*self.state_scaling_factor)
         Y = round(action[1]*self.state_scaling_factor)
         Z = round(action[2]*self.state_scaling_factor)
-        RX = round(action[3]*self.state_scaling_factor)
-        RY = round(action[4]*self.state_scaling_factor)
-        RZ = round(action[5]*self.state_scaling_factor)
-        Gripper = round(action[6]*self.state_scaling_factor)
+        RX = round(self.default_pos[3]*self.state_scaling_factor)
+        RY = round(self.default_pos[4]*self.state_scaling_factor)
+        RZ = round(self.default_pos[5]*self.state_scaling_factor)
+        Gripper = round(action[3]*self.state_scaling_factor)
         self.piper.MotionCtrl_2(0x01, 0x00, 30, 0x00)
         self.piper.EndPoseCtrl(X, Y, Z, RX, RY, RZ)
         self.piper.GripperCtrl(abs(Gripper), 1000, 0x01, 0)

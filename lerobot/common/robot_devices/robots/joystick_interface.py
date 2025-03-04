@@ -168,10 +168,8 @@ class JoystickIntervention():
         self.expert = JoystickInterface(controller_type=controller_type)
         self.left, self.right, self.home = False, False, False
 
-    def action(self, action: np.ndarray) -> np.ndarray:
+    def action(self) -> np.ndarray:
         """
-        Input:
-        - action: policy action
         Output:
         - action: joystick action if nonezero; else, policy action
         """

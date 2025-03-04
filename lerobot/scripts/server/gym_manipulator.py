@@ -70,10 +70,10 @@ class HILSerlRobotEnv(gym.Env):
 
         self.delta = delta
         self.use_delta_action_space = use_delta_action_space
-        self.current_joint_positions = self.robot.follower_arms["main"].read(
-            "Present_Position"
-        )
-
+        # self.current_joint_positions = self.robot.leader_arms["main"].read(
+        #     "Present_Position"
+        # )
+        self.current_joint_positions = self.robot.get_ee_pos()
         # Retrieve the size of the joint position interval bound.
         self.relative_bounds_size = (
             self.robot.config.joint_position_relative_bounds["max"]
@@ -124,7 +124,7 @@ class HILSerlRobotEnv(gym.Env):
         self.observation_space = gym.spaces.Dict(observation_spaces)
 
         # Define the action space for joint positions along with setting an intervention flag.
-        action_dim = len(self.robot.follower_arms["main"].read("Present_Position"))
+        action_dim = 4 # len(self.robot.follower_arms["main"].read("Present_Position"))
         if self.use_delta_action_space:
             action_space_robot = gym.spaces.Box(
                 low=-self.relative_bounds_size.cpu().numpy(),
@@ -210,9 +210,10 @@ class HILSerlRobotEnv(gym.Env):
         """
         policy_action, intervention_bool = action
         teleop_action = None
-        self.current_joint_positions = self.robot.follower_arms["main"].read(
-            "Present_Position"
-        )
+        # self.current_joint_positions = self.robot.follower_arms["main"].read(
+        #     "Present_Position"
+        # )
+        self.current_joint_positions = self.robot.get_ee_pos()
         if isinstance(policy_action, torch.Tensor):
             policy_action = policy_action.cpu().numpy()
             policy_action = np.clip(
@@ -236,7 +237,7 @@ class HILSerlRobotEnv(gym.Env):
             # When applying the delta action space, convert teleop absolute values to relative differences.
             if self.use_delta_action_space:
                 teleop_action = (
-                    teleop_action - self.current_joint_positions
+                    teleop_action
                 ) / self.delta
                 if torch.any(teleop_action < -self.relative_bounds_size) and torch.any(
                     teleop_action > self.relative_bounds_size
@@ -339,13 +340,20 @@ class RewardWrapper(gym.Wrapper):
             if "image" in key
         ]
         start_time = time.perf_counter()
-        with torch.inference_mode():
-            reward = (
-                self.reward_classifier.predict_reward(images, threshold=0.8)
-                if self.reward_classifier is not None
-                else 0.0
-            )
-        info["Reward classifer frequency"] = 1 / (time.perf_counter() - start_time)
+        state = observation["observation.state"]
+        gripper_effort = observation["observation.gripper_effort"]
+        reward = 0.0
+        # state based reward
+        if gripper_effort <-950 and state[2] > 0.25 and state[3] > 0.04:
+            reward = 1.0
+
+        # with torch.inference_mode():
+        #     reward = (
+        #         self.reward_classifier.predict_reward(images, threshold=0.8)
+        #         if self.reward_classifier is not None
+        #         else 0.0
+        #     )
+        # info["Reward classifer frequency"] = 1 / (time.perf_counter() - start_time)
 
         # logging.info(f"Reward: {reward}")
 
