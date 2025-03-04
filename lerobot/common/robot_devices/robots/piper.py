@@ -39,6 +39,7 @@ class PiperRobotConfig:
     # TODO(aliberts): add feature with max_relative target
     # TODO(aliberts): add comment on max_relative target
     max_relative_target: list[float] | float | None = None
+    joint_position_relative_bounds: dict[np.ndarray] | None = None
 
 
 class Rate:
@@ -109,6 +110,7 @@ class PiperRobot(ManipulatorRobot):
         self.piper.GripperCtrl(0,1000,0x01, 0)
         self.state_scaling_factor = 1e6 
         self.default_pos = [0.200337, 0.020786, 0.289284, 0.179831, 0.010918, 0.173467, 0.0]
+        self.joint_position_relative_bounds = self.config.joint_position_relative_bounds
         # self.data_rows = []
         # self.csv_filename = f"arm_poses_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         # Register the signal handler
@@ -256,8 +258,11 @@ class PiperRobot(ManipulatorRobot):
         # ])
         # get relative action from joystick
         action = self.teleop.action()
-        action_record = deepcopy(action)
-        action_record = action_record[:3] + [action_record[-1]]  # Gets first 3 elements and last element
+        # print(action)
+        # Convert action to numpy array first
+        action = np.array(action, dtype=np.float32)
+        action_record = np.concatenate([action[:3], [action[-1]]])
+        
         action[:3] += state[:3]
 
         if self.teleop.home:
@@ -277,8 +282,9 @@ class PiperRobot(ManipulatorRobot):
         # action_record[3:6] -= state[3:6] # just get delta orientation
         # it has to be done after send_action
         state[:3] -= self.default_pos[:3]
-        state = torch.as_tensor(state)
-        action = torch.as_tensor(action_record)
+        state = torch.as_tensor(state).to(torch.float32)
+        action_record = torch.as_tensor(action_record).to(torch.float32)
+        print(action_record)
 
         # Capture images from cameras
         images = {}
@@ -291,8 +297,8 @@ class PiperRobot(ManipulatorRobot):
         # Populate output dictionnaries
         obs_dict, action_dict = {}, {}
         obs_dict["observation.state"] = state
-        obs_dict["observation.gripper_effort"] = self.get_gripper_effort()
-        action_dict["action"] = action
+        obs_dict.update({"gripper_effort": self.get_gripper_effort()})
+        action_dict["action"] = action_record
         for name in self.cameras:
             obs_dict[f"observation.images.{name}"] = images[name]
 
@@ -301,8 +307,15 @@ class PiperRobot(ManipulatorRobot):
     def get_state(self) -> dict:
         end_effector_pose = self.piper.GetArmEndPoseMsgs()
         gripper_pose = self.piper.GetArmGripperMsgs()
-        state = np.array([end_effector_pose.end_pose.X_axis,end_effector_pose.end_pose.Y_axis,end_effector_pose.end_pose.Z_axis
-                    ,gripper_pose.gripper_state.grippers_angle])/self.state_scaling_factor
+        
+        # Convert to float32 numpy array
+        state = np.array([
+            end_effector_pose.end_pose.X_axis,
+            end_effector_pose.end_pose.Y_axis,
+            end_effector_pose.end_pose.Z_axis,
+            gripper_pose.gripper_state.grippers_angle
+        ], dtype=np.float32) / self.state_scaling_factor
+
         return {
             "state": state,
         }
@@ -343,7 +356,7 @@ class PiperRobot(ManipulatorRobot):
         obs_dict["observation.state"] = state
         for name in self.cameras:
             obs_dict[f"observation.images.{name}"] = images[name]
-        obs_dict["observation.gripper_effort"] = self.get_gripper_effort()
+        obs_dict.update({"gripper_effort": self.get_gripper_effort()})
         return obs_dict
 
     def send_action(self, action: list[float]) -> None:
@@ -361,7 +374,7 @@ class PiperRobot(ManipulatorRobot):
         RX = round(self.default_pos[3]*self.state_scaling_factor)
         RY = round(self.default_pos[4]*self.state_scaling_factor)
         RZ = round(self.default_pos[5]*self.state_scaling_factor)
-        Gripper = round(action[3]*self.state_scaling_factor)
+        Gripper = round(action[-1]*self.state_scaling_factor)
         self.piper.MotionCtrl_2(0x01, 0x00, 30, 0x00)
         self.piper.EndPoseCtrl(X, Y, Z, RX, RY, RZ)
         self.piper.GripperCtrl(abs(Gripper), 1000, 0x01, 0)

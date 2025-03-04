@@ -92,7 +92,12 @@ python lerobot/scripts/control_robot.py record \
     -p outputs/train/act_koch_real/checkpoints/080000/pretrained_model
 ```
 """
+import cv2
 
+# Make sure that the UI gets initialized before PyAV (av) gets imported by torchvision
+# This solves the hanging issue with cv2.imshow on Ubuntu
+cv2.namedWindow("i")
+cv2.destroyAllWindows()
 import argparse
 import logging
 import time

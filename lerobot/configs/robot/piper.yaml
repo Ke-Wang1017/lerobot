@@ -10,7 +10,7 @@ robot_type: piper
 # Set this to a positive scalar to have the same value for all motors, or a list that is the same length as
 # the number of motors in your follower arms.
 max_relative_target: null
-joint_position_relative_bounds: # [x y z rx ry rzgripper]
+joint_position_relative_bounds: # [x y z gripper]
   max: [0.28,  0.175,  0.29, 0.08]
   min: [0.19,  -0.11,  0.20,  0.]
 
@@ -21,10 +21,10 @@ leader_arms:
       joint_1: [1]
       joint_2: [2]
       joint_3: [3]
-      joint_4: [4]
-      joint_5: [5]
-      joint_6: [6]
-      gripper: [7]
+      # joint_4: [4]
+      # joint_5: [5]
+      # joint_6: [6]
+      gripper: [4]
 
 cameras:
   wrist:

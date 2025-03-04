@@ -822,7 +822,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.episode_buffer = self.create_episode_buffer()
 
     def start_image_writer(self, num_processes: int = 0, num_threads: int = 4) -> None:
-        if isinstance(self.image_writer, AsyncImageWriter):
+        if isinstance(self.image_writer, AsyncImageWriter): 
             logging.warning(
                 "You are starting a new AsyncImageWriter that is replacing an already existing one in the dataset."
             )

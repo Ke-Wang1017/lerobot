@@ -277,12 +277,12 @@ def control_loop(
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
 
-        current_joint_positions = robot.follower_arms["main"].read("Present_Position")
+        # current_joint_positions = robot.get_ee_pos()
 
         if teleoperate:
             observation, action = robot.teleop_step(record_data=True)
-            if record_delta_actions:
-                action["action"] = action["action"] - current_joint_positions
+            # if record_delta_actions:
+            #     action["action"] = action["action"] - current_joint_positions
         else:
             observation = robot.capture_observation()
 
