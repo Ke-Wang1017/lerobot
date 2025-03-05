@@ -948,10 +948,12 @@ if __name__ == "__main__":
 
     robot_cfg = init_hydra_config(args.robot_path, args.robot_overrides)
     robot = make_robot(robot_cfg)
-
-    reward_classifier = get_classifier(
-        args.reward_classifier_pretrained_path, args.reward_classifier_config_file
-    )
+    if args.reward_classifier_pretrained_path is not None:
+        reward_classifier = get_classifier(
+            args.reward_classifier_pretrained_path, args.reward_classifier_config_file
+        )
+    else:
+        reward_classifier = None
     user_relative_joint_positions = True
 
     cfg = init_hydra_config(args.env_path, args.env_overrides)

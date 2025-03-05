@@ -109,7 +109,7 @@ policy:
   utd_ratio: 2 # 10
 
 actor_learner_config:
-  learner_host: "127.0.0.1" #"100.94.229.244"
+  learner_host: "100.94.229.244"
   learner_port: 50051
   policy_parameters_push_frequency: 15
 
