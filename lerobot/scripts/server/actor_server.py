@@ -30,6 +30,10 @@ import torch
 from omegaconf import DictConfig
 from torch import nn
 
+import time
+
+from lerobot.common.robot_devices.utils import busy_wait
+
 # TODO: Remove the import of maniskill
 # from lerobot.common.envs.factory import make_maniskill_env
 # from lerobot.common.envs.utils import preprocess_maniskill_observation
@@ -316,6 +320,7 @@ def act_with_policy(
     episode_intervention = False
 
     for interaction_step in range(cfg.training.online_steps):
+        start_time=time.perf_counter()
         if shutdown_event.is_set():
             logging.info("[ACTOR] Shutdown signal received. Exiting...")
             return
@@ -418,6 +423,9 @@ def act_with_policy(
             sum_reward_episode = 0.0
             episode_intervention = False
             obs, info = online_env.reset()
+    if cfg.fps is not None:
+        dt_time = time.perf_counter() - start_time
+        busy_wait(1 / cfg.fps - dt_time)
 
 
 def send_transitions_in_chunks(transitions: list, message_queue, chunk_size: int = 100):

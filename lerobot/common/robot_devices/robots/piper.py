@@ -297,7 +297,7 @@ class PiperRobot(ManipulatorRobot):
         # Populate output dictionnaries
         obs_dict, action_dict = {}, {}
         obs_dict["observation.state"] = state
-        obs_dict.update({"gripper_effort": self.get_gripper_effort()})
+        # obs_dict.update({"gripper_effort": self.get_gripper_effort()})
         action_dict["action"] = action_record
         for name in self.cameras:
             obs_dict[f"observation.images.{name}"] = images[name]
@@ -356,7 +356,7 @@ class PiperRobot(ManipulatorRobot):
         obs_dict["observation.state"] = state
         for name in self.cameras:
             obs_dict[f"observation.images.{name}"] = images[name]
-        obs_dict.update({"gripper_effort": self.get_gripper_effort()})
+        # obs_dict.update({"gripper_effort": self.get_gripper_effort()})
         return obs_dict
 
     def send_action(self, action: list[float]) -> None:

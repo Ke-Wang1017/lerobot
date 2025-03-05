@@ -60,9 +60,7 @@ class HILSerlRobotEnv(gym.Env):
         if not self.robot.is_connected:
             self.robot.connect()
 
-        self.initial_follower_position = robot.follower_arms["main"].read(
-            "Present_Position"
-        )
+        self.initial_follower_position = self.robot.get_state()["state"]
 
         # Episode tracking.
         self.current_step = 0
@@ -73,16 +71,14 @@ class HILSerlRobotEnv(gym.Env):
         # self.current_joint_positions = self.robot.leader_arms["main"].read(
         #     "Present_Position"
         # )
-        self.current_joint_positions = self.robot.get_ee_pos()
+        self.current_joint_positions = self.robot.get_state()["state"]
         # Retrieve the size of the joint position interval bound.
         self.relative_bounds_size = (
-            self.robot.config.joint_position_relative_bounds["max"]
-            - self.robot.config.joint_position_relative_bounds["min"]
-        )
+            torch.tensor(self.robot.config.joint_position_relative_bounds["max"])
+            - torch.tensor(self.robot.config.joint_position_relative_bounds["min"])
+        ) * self.delta
 
-        self.delta_relative_bounds_size = self.relative_bounds_size * self.delta
-
-        self.robot.config.max_relative_target = self.delta_relative_bounds_size.float()
+        self.robot.config.max_relative_target = self.relative_bounds_size
 
         # Dynamically configure the observation and action spaces.
         self._setup_spaces()
@@ -213,19 +209,22 @@ class HILSerlRobotEnv(gym.Env):
         # self.current_joint_positions = self.robot.follower_arms["main"].read(
         #     "Present_Position"
         # )
-        self.current_joint_positions = self.robot.get_ee_pos()
+        self.current_joint_positions = self.robot.get_state()["state"]
         if isinstance(policy_action, torch.Tensor):
-            policy_action = policy_action.cpu().numpy()
+            policy_action = policy_action.cpu().numpy() 
             policy_action = np.clip(
                 policy_action, self.action_space[0].low, self.action_space[0].high
             )
         if not intervention_bool:
             if self.use_delta_action_space:
                 target_joint_positions = (
-                    self.current_joint_positions + self.delta * policy_action
+                    self.current_joint_positions + policy_action
                 )
             else:
                 target_joint_positions = policy_action
+            target_joint_positions = np.clip(
+                target_joint_positions, self.robot.config.joint_position_relative_bounds["min"], self.robot.config.joint_position_relative_bounds["max"]
+            )
             self.robot.send_action(torch.from_numpy(target_joint_positions))
             observation = self.robot.capture_observation()
         else:
@@ -236,9 +235,9 @@ class HILSerlRobotEnv(gym.Env):
 
             # When applying the delta action space, convert teleop absolute values to relative differences.
             if self.use_delta_action_space:
-                teleop_action = (
-                    teleop_action
-                ) / self.delta
+                # teleop_action = (
+                #     teleop_action
+                # ) / self.delta
                 if torch.any(teleop_action < -self.relative_bounds_size) and torch.any(
                     teleop_action > self.relative_bounds_size
                 ):
@@ -326,7 +325,7 @@ class RewardWrapper(gym.Wrapper):
         self.env = env
 
         # NOTE: We got 15% speedup by compiling the model
-        self.reward_classifier = torch.compile(reward_classifier)
+        # self.reward_classifier = torch.compile(reward_classifier)
 
         if isinstance(device, str):
             device = torch.device(device)
@@ -341,7 +340,7 @@ class RewardWrapper(gym.Wrapper):
         ]
         start_time = time.perf_counter()
         state = observation["observation.state"]
-        gripper_effort = observation["observation.gripper_effort"]
+        gripper_effort = self.robot.get_gripper_effort()
         reward = 0.0
         # state based reward
         if gripper_effort <-950 and state[2] > 0.25 and state[3] > 0.04:
@@ -477,6 +476,7 @@ class TimeLimitWrapper(gym.Wrapper):
             # if self.current_step >= self.max_episode_steps:
             # Terminated = True
             terminated = True
+            truncated = True
         return obs, reward, terminated, truncated, info
 
     def reset(self, seed=None, options=None):
@@ -791,7 +791,7 @@ def make_robot_env(
     )
 
     # Add observation and image processing
-    env = ConvertToLeRobotObservation(env=env, device=cfg.device)
+    env = ConvertToLeRobotObservation(env=env, device=cfg.env.device)
     if cfg.env.wrapper.crop_params_dict is not None:
         env = ImageCropResizeWrapper(
             env=env,
@@ -800,7 +800,9 @@ def make_robot_env(
         )
 
     # Add reward computation and control wrappers
-    env = RewardWrapper(env=env, reward_classifier=reward_classifier, device=cfg.device)
+    env = RewardWrapper(
+        env=env, reward_classifier=reward_classifier, device=cfg.env.device
+    )
     env = TimeLimitWrapper(
         env=env, control_time_s=cfg.env.wrapper.control_time_s, fps=cfg.fps
     )
@@ -808,9 +810,9 @@ def make_robot_env(
     env = ResetWrapper(
         env=env, reset_fn=None, reset_time_s=cfg.env.wrapper.reset_time_s
     )
-    env = JointMaskingActionSpace(
-        env=env, mask=cfg.env.wrapper.joint_masking_action_space
-    )
+    # env = JointMaskingActionSpace(
+    #     env=env, mask=cfg.env.wrapper.joint_masking_action_space
+    # )
     env = BatchCompitableWrapper(env=env)
 
     return env
@@ -956,7 +958,7 @@ if __name__ == "__main__":
     env = make_robot_env(
         robot,
         reward_classifier,
-        cfg.env,  # .wrapper,
+        cfg,  # .wrapper,
     )
 
     env.reset()
