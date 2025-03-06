@@ -76,7 +76,7 @@ class JoystickInterface:
         self.manager = multiprocessing.Manager()
         self.latest_data = self.manager.dict()
         self.latest_data["action"] = [0.0] * 6
-        self.latest_data["buttons"] = [False, False, False]
+        self.latest_data["buttons"] = [False, False, False, False]
 
         # Start a process to continuously read Joystick state
         self._process = multiprocessing.Process(target=self._read_joystick)
@@ -87,7 +87,7 @@ class JoystickInterface:
     def _read_joystick(self):
         """Add a try-except to prevent thread crashes"""
         action = [0.0] * 6
-        buttons = [False, False, False]
+        buttons = [False, False, False, False]
         
         while True:
             try:
@@ -130,6 +130,10 @@ class JoystickInterface:
                     # Go back to home, B button on xbox controller
                     elif event.code == 'BTN_EAST': 
                         buttons[2] = bool(event.state)
+                     # Indicate recording is starting, X button on xbox controller
+                    elif event.code == 'BTN_NORTH':
+                        buttons[3] = bool(event.state)
+
                 
 
                 # Update the shared state
@@ -166,7 +170,7 @@ class JoystickIntervention():
     def __init__(self, controller_type=ControllerType.XBOX, gripper_enabled=True):
         self.gripper_enabled = gripper_enabled
         self.expert = JoystickInterface(controller_type=controller_type)
-        self.left, self.right, self.home = False, False, False
+        self.left, self.right, self.home, self.intervention_start = False, False, False, False
 
     def action(self) -> np.ndarray:
         """
@@ -176,7 +180,9 @@ class JoystickIntervention():
         deadzone = 0.003
 
         expert_a, buttons = self.expert.get_action()
-        self.left, self.right, self.home = tuple(buttons)
+        self.left, self.right, self.home, self.intervention_start = tuple(buttons)
+        import logging
+        logging.info(f"Intervention on joystick: {self.intervention_start}")
 
         for i, a in enumerate(expert_a):
             if abs(a) <= deadzone:
@@ -195,6 +201,11 @@ class JoystickIntervention():
             expert_a = np.concatenate((expert_a, gripper_action), axis=0)
         
         return expert_a
+
+    def get_intervention_start(self) -> bool:
+        _, buttons = self.expert.get_action()
+        _, _, _, self.intervention_start = tuple(buttons)
+        return self.intervention_start
     
     def close(self):
         self.expert.close()

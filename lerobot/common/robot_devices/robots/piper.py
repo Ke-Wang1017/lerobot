@@ -324,6 +324,9 @@ class PiperRobot(ManipulatorRobot):
         gripper_pose = self.piper.GetArmGripperMsgs()
         return gripper_pose.gripper_state.grippers_effort
     
+    def get_intervention_start(self) -> bool:
+        return self.teleop.get_intervention_start()
+    
     # def get_ee_pos(self) -> list[float]:
     #     end_effector_pose = self.piper.GetArmEndPoseMsgs()
     #     gripper_pose = self.piper.GetArmGripperMsgs()
@@ -340,7 +343,7 @@ class PiperRobot(ManipulatorRobot):
         if self.state_keys is None:
             self.state_keys = list(state)
 
-        state = torch.as_tensor(list(state.values())).type(torch.float32)
+        state = torch.as_tensor(np.array(list(state.values())).astype(np.float32))
         state = state.squeeze(0)
 
         # Capture images from cameras
@@ -391,9 +394,9 @@ class PiperRobot(ManipulatorRobot):
         if self.teleop is not None:
             self.teleop.close()
 
-        # if len(self.cameras) > 0:
-        #     for cam in self.cameras.values():
-        #         cam.disconnect()
+        if len(self.cameras) > 0:
+            for cam in self.cameras.values():
+                cam.disconnect()
 
         self.is_connected = False
 

@@ -206,9 +206,6 @@ class HILSerlRobotEnv(gym.Env):
         """
         policy_action, intervention_bool = action
         teleop_action = None
-        # self.current_joint_positions = self.robot.follower_arms["main"].read(
-        #     "Present_Position"
-        # )
         self.current_joint_positions = self.robot.get_state()["state"]
         if isinstance(policy_action, torch.Tensor):
             policy_action = policy_action.cpu().numpy() 
@@ -343,8 +340,11 @@ class RewardWrapper(gym.Wrapper):
         gripper_effort = self.robot.get_gripper_effort()
         reward = 0.0
         # state based reward
-        if gripper_effort <-950 and state[2] > 0.25 and state[3] > 0.04:
+        if gripper_effort <-950 and state[2] > -0.03 and state[3] > 0.04:
             reward = 1.0
+        # print(f"reward: {reward}")
+        # print(f"gripper_effort: {gripper_effort}")
+        # print(f"state: {state}")
 
         # with torch.inference_mode():
         #     reward = (
@@ -352,7 +352,7 @@ class RewardWrapper(gym.Wrapper):
         #         if self.reward_classifier is not None
         #         else 0.0
         #     )
-        # info["Reward classifer frequency"] = 1 / (time.perf_counter() - start_time)
+        info["Reward classifer frequency"] = 1 / (time.perf_counter() - start_time)
 
         # logging.info(f"Reward: {reward}")
 
@@ -707,6 +707,33 @@ class KeyboardInterfaceWrapper(gym.Wrapper):
         super().close()
 
 
+class JoystickInterfaceWrapper(gym.Wrapper):
+    """Wrapper for joystick interface to handle interventions."""
+
+    def __init__(self, env):
+        super().__init__(env)
+        # self.env = env
+        self.robot = self.unwrapped.robot
+    
+    def step(self, action: Any) -> Tuple[Any, float, bool, bool, Dict]:
+        """Check if intervention button is pressed and toggle intervention state."""
+        # Check if the intervention button is pressed (X button on Xbox controller)
+        is_intervention = self.robot.get_intervention_start()
+        logging.info(f"Intervention: {is_intervention}")
+        
+     # Extract policy_action if needed
+        if isinstance(self.env.action_space, gym.spaces.Tuple):
+            policy_action = action[0]
+
+        # Execute the step in the underlying environment
+        obs, reward, terminated, truncated, info = self.env.step(
+            (policy_action, is_intervention)
+        )
+
+        return obs, reward, terminated, truncated, info
+
+
+
 class ResetWrapper(gym.Wrapper):
     def __init__(
         self,
@@ -806,7 +833,8 @@ def make_robot_env(
     env = TimeLimitWrapper(
         env=env, control_time_s=cfg.env.wrapper.control_time_s, fps=cfg.fps
     )
-    env = KeyboardInterfaceWrapper(env=env)
+    # Create the appropriate interface wrapper
+    env = JoystickInterfaceWrapper(env=env)
     env = ResetWrapper(
         env=env, reset_fn=None, reset_time_s=cfg.env.wrapper.reset_time_s
     )
