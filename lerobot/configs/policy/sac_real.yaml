@@ -19,7 +19,7 @@ training:
   batch_size: 64
   grad_clip_norm: 10.0
   lr: 3e-4
-
+  storage_device: "cpu"
   eval_freq: 2500
   log_freq: 1
   save_freq: 2000000
