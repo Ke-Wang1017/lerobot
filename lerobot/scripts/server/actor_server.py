@@ -423,9 +423,9 @@ def act_with_policy(
             sum_reward_episode = 0.0
             episode_intervention = False
             obs, info = online_env.reset()
-    if cfg.fps is not None:
-        dt_time = time.perf_counter() - start_time
-        busy_wait(1 / cfg.fps - dt_time)
+        if cfg.fps is not None:
+            dt_time = time.perf_counter() - start_time
+            busy_wait(1 / cfg.fps - dt_time)
 
 
 def send_transitions_in_chunks(transitions: list, message_queue, chunk_size: int = 100):

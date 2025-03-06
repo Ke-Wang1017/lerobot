@@ -77,6 +77,7 @@ class HILSerlRobotEnv(gym.Env):
             torch.tensor(self.robot.config.joint_position_relative_bounds["max"])
             - torch.tensor(self.robot.config.joint_position_relative_bounds["min"])
         ) * self.delta
+        self.relative_bounds_size[-1] = self.relative_bounds_size[-1] / self.delta
 
         self.robot.config.max_relative_target = self.relative_bounds_size
 
