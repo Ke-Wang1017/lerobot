@@ -182,7 +182,7 @@ class JoystickIntervention():
         expert_a, buttons = self.expert.get_action()
         self.left, self.right, self.home, self.intervention_start = tuple(buttons)
         import logging
-        logging.info(f"Intervention on joystick: {self.intervention_start}")
+        # logging.info(f"Intervention on joystick: {self.intervention_start}")
 
         for i, a in enumerate(expert_a):
             if abs(a) <= deadzone:

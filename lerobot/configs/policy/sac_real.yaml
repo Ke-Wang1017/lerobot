@@ -8,7 +8,7 @@
 #   env.gym.obs_type=environment_state_agent_pos \
 
 seed: 1
-dataset_repo_id: KeWangRobotics/piper_rl_1_cropped_resized
+dataset_repo_id: KeWangRobotics/piper_rl_2_cropped_resized
 #aractingi/push_cube_square_offline_demo_cropped_resized
 
 training:
@@ -16,7 +16,7 @@ training:
   num_workers: 4
 
   # batch_size: 256
-  batch_size: 64
+  batch_size: 512
   grad_clip_norm: 10.0
   lr: 3e-4
 
@@ -32,7 +32,7 @@ training:
   online_steps_between_rollouts: 1000
   online_sampling_ratio: 0.5
   online_env_seed: 10000
-  online_buffer_capacity: 10000
+  online_buffer_capacity: 80000
   online_buffer_seed_size: 0
   online_step_before_learning: 100 #5000
   do_online_rollout_async: false
@@ -73,14 +73,14 @@ policy:
     observation.state: min_max
   input_normalization_params:
     observation.images.wrist:
-      mean: [0.1933693289756775, 0.17293578386306763, 0.1760566383600235]
-      std: [0.20352579653263092, 0.18551215529441833, 0.17523817718029022]
+      mean: [0.12581096589565277, 0.10277304798364639, 0.10161344707012177]
+      std: [0.13049355149269104, 0.0891309306025505, 0.04820159450173378]
     observation.images.top:
-      mean: [0.5148501396179199, 0.49168261885643005, 0.451005220413208]
-      std: [0.27577200531959534, 0.28200891613960266, 0.28951987624168396]
+      mean: [0.2826720178127289, 0.2518046796321869, 0.19795742630958557]
+      std: [0.18587979674339294, 0.1766057014465332, 0.16449621319770813]
     observation.state:
-      min: [0.19,  -0.11,  0.20,  0.]
-      max: [0.28,  0.175,  0.29, 0.08]
+      min: [0.19,  -0.06,  0.205,  0.]
+      max: [0.28,  0.1,  0.29, 0.08]
 
       # min: [-87.09961,     62.402344,    67.23633,     36.035156,    77.34375,0.53691274]
       # max: [58.183594,   131.83594,    145.98633,     82.08984,     78.22266, 0.60402685]
@@ -91,8 +91,8 @@ policy:
     action: min_max
   output_normalization_params:
     action:
-      min: [0.19,  -0.11,  0.20,  0.]
-      max: [0.28,  0.175,  0.29, 0.08]
+      max: [0.28,  0.1,  0.29, 0.08]
+      min: [0.19,  -0.06,  0.205,  0.]
 
   # Architecture / modeling.
   # Neural networks.
@@ -111,7 +111,7 @@ policy:
   utd_ratio: 10 # 10
 
 actor_learner_config:
-  learner_host: "0.0.0.0"
+  learner_host: "100.88.47.173"
   learner_port: 50051
   policy_parameters_push_frequency: 15
 

@@ -271,9 +271,9 @@ class PiperRobot(ManipulatorRobot):
         self.logs["read_pos_dt_s"] = time.perf_counter() - before_read_t
 
         before_write_t = time.perf_counter()
-        self.send_action(action)
+        for _ in range(5):
+            self.send_action(action)
         self.logs["write_pos_dt_s"] = time.perf_counter() - before_write_t
-        self.rate.sleep(time.perf_counter() - before_write_t)
         if self.state_keys is None:
             self.state_keys = list(state)
 
@@ -284,7 +284,7 @@ class PiperRobot(ManipulatorRobot):
         state[:3] -= self.default_pos[:3]
         state = torch.as_tensor(state).to(torch.float32)
         action_record = torch.as_tensor(action_record).to(torch.float32)
-        print(action_record)
+        # print(action_record)
 
         # Capture images from cameras
         images = {}
@@ -301,6 +301,7 @@ class PiperRobot(ManipulatorRobot):
         action_dict["action"] = action_record
         for name in self.cameras:
             obs_dict[f"observation.images.{name}"] = images[name]
+        self.rate.sleep(time.perf_counter() - before_read_t)
 
         return obs_dict, action_dict
 

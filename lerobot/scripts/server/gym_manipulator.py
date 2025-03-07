@@ -886,7 +886,7 @@ def replay_episode(env, repo_id, root=None, episode=0):
         start_episode_t = time.perf_counter()
 
         action = actions[idx]["action"][:4]
-        print(action)
+        # print(action)
         env.step((action / env.unwrapped.delta, False))
 
         dt_s = time.perf_counter() - start_episode_t
