@@ -720,7 +720,7 @@ class JoystickInterfaceWrapper(gym.Wrapper):
         """Check if intervention button is pressed and toggle intervention state."""
         # Check if the intervention button is pressed (X button on Xbox controller)
         is_intervention = self.robot.get_intervention_start()
-        logging.info(f"Intervention: {is_intervention}")
+        # logging.info(f"Intervention: {is_intervention}")
         
      # Extract policy_action if needed
         if isinstance(self.env.action_space, gym.spaces.Tuple):
