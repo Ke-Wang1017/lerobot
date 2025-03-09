@@ -271,8 +271,9 @@ class PiperRobot(ManipulatorRobot):
         self.logs["read_pos_dt_s"] = time.perf_counter() - before_read_t
 
         before_write_t = time.perf_counter()
-        for _ in range(5):
-            self.send_action(action)
+        self.send_action(action)
+        from lerobot.common.robot_devices.utils import busy_wait
+        busy_wait(0.01)
         self.logs["write_pos_dt_s"] = time.perf_counter() - before_write_t
         if self.state_keys is None:
             self.state_keys = list(state)
@@ -301,7 +302,7 @@ class PiperRobot(ManipulatorRobot):
         action_dict["action"] = action_record
         for name in self.cameras:
             obs_dict[f"observation.images.{name}"] = images[name]
-        self.rate.sleep(time.perf_counter() - before_read_t)
+        # self.rate.sleep(time.perf_counter() - before_read_t)
 
         return obs_dict, action_dict
 

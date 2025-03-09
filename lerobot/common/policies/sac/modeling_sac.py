@@ -183,7 +183,7 @@ class SACPolicy(
     def compute_loss_critic(self, observations, actions, rewards, next_observations, done, observation_features: Tensor | None = None, next_observation_features: Tensor | None = None) -> Tensor:
         temperature = self.log_alpha.exp().item()
         with torch.no_grad():
-            next_action_preds, next_log_probs, _ = self.actor(next_observations, next_observation_features)
+            next_action_preds, next_log_probs, _ = self.actor.select_action(next_observations, next_observation_features)
 
             # 2- compute q targets
             q_targets = self.critic_forward(
