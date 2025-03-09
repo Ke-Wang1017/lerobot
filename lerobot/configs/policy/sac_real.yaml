@@ -16,7 +16,7 @@ training:
   num_workers: 4
 
   # batch_size: 256
-  batch_size: 512
+  batch_size: 256
   grad_clip_norm: 10.0
   lr: 3e-4
 
@@ -24,7 +24,7 @@ training:
 
   eval_freq: 2500
   log_freq: 1
-  save_freq: 2000000
+  save_freq: 200000
 
   online_steps: 1000000
   online_rollout_n_episodes: 10
@@ -32,7 +32,7 @@ training:
   online_steps_between_rollouts: 1000
   online_sampling_ratio: 0.5
   online_env_seed: 10000
-  online_buffer_capacity: 80000
+  online_buffer_capacity: 10000
   online_buffer_seed_size: 0
   online_step_before_learning: 100 #5000
   do_online_rollout_async: false
@@ -73,19 +73,14 @@ policy:
     observation.state: min_max
   input_normalization_params:
     observation.images.wrist:
-      mean: [0.12581096589565277, 0.10277304798364639, 0.10161344707012177]
-      std: [0.13049355149269104, 0.0891309306025505, 0.04820159450173378]
+      mean: [0.1619289219379425, 0.12990622222423553, 0.09936489164829254]
+      std: [0.1582489311695099, 0.10825634747743607, 0.06002498418092728]
     observation.images.top:
-      mean: [0.2826720178127289, 0.2518046796321869, 0.19795742630958557]
-      std: [0.18587979674339294, 0.1766057014465332, 0.16449621319770813]
+      mean: [0.27824220061302185, 0.2541154623031616, 0.2035747468471527]
+      std: [0.21401384472846985, 0.20652416348457336, 0.1943526417016983]
     observation.state:
       min: [0.19,  -0.06,  0.205,  0.]
       max: [0.28,  0.1,  0.29, 0.08]
-
-      # min: [-87.09961,     62.402344,    67.23633,     36.035156,    77.34375,0.53691274]
-      # max: [58.183594,   131.83594,    145.98633,     82.08984,     78.22266, 0.60402685]
-      # min: [-88.50586,  23.81836, 0.87890625, -32.16797, 78.66211,   0.53691274]
-      # max: [84.55078, 187.11914, 145.98633, 101.60156, 146.60156,  88.18792]
 
   output_normalization_modes:
     action: min_max
@@ -93,14 +88,13 @@ policy:
     action:
       max: [0.28,  0.1,  0.29, 0.08]
       min: [0.19,  -0.06,  0.205,  0.]
-
   # Architecture / modeling.
   # Neural networks.
   image_encoder_hidden_dim: 32
   # discount: 0.99
   discount: 0.97
   temperature_init: 1.0
-  num_critics: 10 #10
+  num_critics: 2 #10
   camera_number: 2
   num_subsample_critics: null
   critic_lr: 3e-4
@@ -108,10 +102,10 @@ policy:
   temperature_lr: 3e-4
   # critic_target_update_weight: 0.005
   critic_target_update_weight: 0.01
-  utd_ratio: 10 # 10
+  utd_ratio: 2 # 10
 
 actor_learner_config:
-  learner_host: "100.88.47.173"
+  learner_host: "0.0.0.0"
   learner_port: 50051
   policy_parameters_push_frequency: 15
 
