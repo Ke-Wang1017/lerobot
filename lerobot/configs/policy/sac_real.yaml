@@ -32,7 +32,7 @@ training:
   online_steps_between_rollouts: 1000
   online_sampling_ratio: 0.5
   online_env_seed: 10000
-  online_buffer_capacity: 80000
+  online_buffer_capacity: 10000
   online_buffer_seed_size: 0
   online_step_before_learning: 100 #5000
   do_online_rollout_async: false
@@ -73,11 +73,11 @@ policy:
     observation.state: min_max
   input_normalization_params:
     observation.images.wrist:
-      mean: [0.12581096589565277, 0.10277304798364639, 0.10161344707012177]
-      std: [0.13049355149269104, 0.0891309306025505, 0.04820159450173378]
+      mean: [0.1619289219379425, 0.12990622222423553, 0.09936489164829254]
+      std: [0.1582489311695099, 0.10825634747743607, 0.06002498418092728]
     observation.images.top:
-      mean: [0.2826720178127289, 0.2518046796321869, 0.19795742630958557]
-      std: [0.18587979674339294, 0.1766057014465332, 0.16449621319770813]
+      mean: [0.27824220061302185, 0.2541154623031616, 0.2035747468471527]
+      std: [0.21401384472846985, 0.20652416348457336, 0.1943526417016983]
     observation.state:
       min: [0.19,  -0.06,  0.205,  0.]
       max: [0.28,  0.1,  0.29, 0.08]
@@ -111,7 +111,7 @@ policy:
   utd_ratio: 10 # 10
 
 actor_learner_config:
-  learner_host: "100.88.47.173"
+  learner_host: "100.82.89.58"
   learner_port: 50051
   policy_parameters_push_frequency: 15
 
