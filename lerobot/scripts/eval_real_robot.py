@@ -16,6 +16,7 @@ ckpt_path = "lerobot/policy/piper_diffusion"
 # ckpt_path = "outputs/train/2025-02-02/23-39-04_real_world_act_default/checkpoints/060000/pretrained_model"
 policy = DiffusionPolicy.from_pretrained(ckpt_path, local_files_only=False)
 # policy = ACTPolicy.from_pretrained(ckpt_path, local_files_only=False)
+policy = torch.compile(policy)
 policy.to(device)
 robot_config_path = 'lerobot/configs/robot/piper.yaml'
 robot_cfg = init_hydra_config(robot_config_path)
