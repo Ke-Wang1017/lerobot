@@ -427,6 +427,7 @@ class DiTFlowModel(nn.Module):
             clip_sample=config.clip_sample,
             clip_sample_range=config.clip_sample_range,
         )
+        
 
         self.num_inference_steps = config.num_inference_steps or 100
         self.training_noise_sampling = config.training_noise_sampling

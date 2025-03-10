@@ -142,6 +142,11 @@ class DiffusionConfig(PreTrainedConfig):
     beta_start: float = 0.0001
     beta_end: float = 0.02
     prediction_type: str = "epsilon"
+    training_noise_sampling: str = (
+        "uniform"  # "uniform" or "beta", from pi0 https://www.physicalintelligence.company/download/pi0.pdf
+    )
+    clip_sample: bool = True
+    clip_sample_range: float = 1.0
     clip_sample: bool = True
     clip_sample_range: float = 1.0
 

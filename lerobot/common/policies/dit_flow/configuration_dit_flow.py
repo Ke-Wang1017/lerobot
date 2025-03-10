@@ -95,8 +95,8 @@ class DiTFlowConfig(PreTrainedConfig):
 
     # Inputs / output structure.
     n_obs_steps: int = 2
-    horizon: int = 16
-    n_action_steps: int = 8
+    horizon: int = 32
+    n_action_steps: int = 16
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -108,15 +108,15 @@ class DiTFlowConfig(PreTrainedConfig):
 
     # The original implementation doesn't sample frames for the last 7 steps,
     # which avoids excessive padding and leads to improved training results.
-    drop_n_last_frames: int = 7  # horizon - n_action_steps - n_obs_steps + 1
+    drop_n_last_frames: int = 15  # horizon - n_action_steps - n_obs_steps + 1
 
     # Architecture / modeling.
     # Vision backbone.
     vision_backbone: str = "resnet18"
-    crop_shape: tuple[int, int] | None = (84, 84)
+    crop_shape: tuple[int, int] | None = (456, 616)
     crop_is_random: bool = True
-    pretrained_backbone_weights: str | None = None
-    use_group_norm: bool = True
+    pretrained_backbone_weights: str = "ResNet18_Weights.IMAGENET1K_V1"
+    use_group_norm: bool = False
     spatial_softmax_num_keypoints: int = 32
     use_separate_rgb_encoder_per_camera: bool = False
 
