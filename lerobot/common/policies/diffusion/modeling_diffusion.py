@@ -379,7 +379,7 @@ class DiffusionModel(nn.Module):
         # noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
 
         # Sample noise to add to the trajectory.
-        noise = self.velocity_net.sample_noise(trajectory.shape[0], trajectory.device)
+        noise = torch.randn(trajectory.shape, device=trajectory.device)
         # Sample a random noising timestep for each item in the batch.
         timesteps = self.noise_distribution.sample((trajectory.shape[0],)).to(trajectory.device)
         # Add noise to the clean trajectories according to the noise magnitude at each timestep.

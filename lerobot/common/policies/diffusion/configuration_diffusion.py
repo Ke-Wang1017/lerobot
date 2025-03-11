@@ -147,11 +147,9 @@ class DiffusionConfig(PreTrainedConfig):
     )
     clip_sample: bool = True
     clip_sample_range: float = 1.0
-    clip_sample: bool = True
-    clip_sample_range: float = 1.0
 
     # Inference
-    num_inference_steps: int | None = None
+    num_inference_steps: int | None = 10
 
     # Loss computation
     do_mask_loss_for_padding: bool = False
