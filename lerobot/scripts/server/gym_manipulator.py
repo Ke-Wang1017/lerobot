@@ -121,7 +121,7 @@ class HILSerlRobotEnv(gym.Env):
         self.observation_space = gym.spaces.Dict(observation_spaces)
 
         # Define the action space for joint positions along with setting an intervention flag.
-        action_dim = 4 # len(self.robot.follower_arms["main"].read("Present_Position"))
+        action_dim = 3 # len(self.robot.follower_arms["main"].read("Present_Position"))
         if self.use_delta_action_space:
             action_space_robot = gym.spaces.Box(
                 low=-self.relative_bounds_size.cpu().numpy(),
@@ -223,7 +223,9 @@ class HILSerlRobotEnv(gym.Env):
             target_joint_positions = np.clip(
                 target_joint_positions, self.robot.config.joint_position_relative_bounds["min"], self.robot.config.joint_position_relative_bounds["max"]
             )
-            self.robot.send_action(torch.from_numpy(target_joint_positions))
+            action_full = self.robot.teleop.action()
+            # add gripper action to the target joint positions
+            self.robot.send_action(torch.from_numpy(np.concatenate([target_joint_positions, [action_full[-1]]])))
             observation = self.robot.capture_observation()
         else:
             observation, teleop_action = self.robot.teleop_step(record_data=True)
@@ -338,10 +340,10 @@ class RewardWrapper(gym.Wrapper):
         ]
         start_time = time.perf_counter()
         state = observation["observation.state"]
-        gripper_effort = self.robot.get_gripper_effort()
+        gripper_state = self.robot.get_gripper_state()
         reward = 0.0
         # state based reward
-        if gripper_effort <-950 and state[2] > -0.03 and state[3] > 0.04:
+        if gripper_state[1] <-950 and state[2] > -0.03 and gripper_state[0] > 0.04:
             reward = 1.0
         # print(f"reward: {reward}")
         # print(f"gripper_effort: {gripper_effort}")

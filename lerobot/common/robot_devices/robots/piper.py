@@ -261,7 +261,8 @@ class PiperRobot(ManipulatorRobot):
         # print(action)
         # Convert action to numpy array first
         action = np.array(action, dtype=np.float32)
-        action_record = np.concatenate([action[:3], [action[-1]]])
+        action_record = np.array(action[:3])
+        # action_record = np.concatenate([action[:3], [action[-1]]])
         
         action[:3] += state[:3]
 
@@ -272,6 +273,7 @@ class PiperRobot(ManipulatorRobot):
 
         before_write_t = time.perf_counter()
         self.send_action(action)
+        # It is needed to give time for the CAN bus communication to complete
         from lerobot.common.robot_devices.utils import busy_wait
         busy_wait(0.01)
         self.logs["write_pos_dt_s"] = time.perf_counter() - before_write_t
@@ -315,16 +317,16 @@ class PiperRobot(ManipulatorRobot):
             end_effector_pose.end_pose.X_axis,
             end_effector_pose.end_pose.Y_axis,
             end_effector_pose.end_pose.Z_axis,
-            gripper_pose.gripper_state.grippers_angle
+            # gripper_pose.gripper_state.grippers_angle
         ], dtype=np.float32) / self.state_scaling_factor
 
         return {
             "state": state,
         }
 
-    def get_gripper_effort(self) -> float:
+    def get_gripper_state(self) -> float:
         gripper_pose = self.piper.GetArmGripperMsgs()
-        return gripper_pose.gripper_state.grippers_effort
+        return np.array([gripper_pose.gripper_state.grippers_angle, gripper_pose.gripper_state.grippers_effort])
     
     def get_intervention_start(self) -> bool:
         return self.teleop.get_intervention_start()
