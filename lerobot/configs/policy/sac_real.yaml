@@ -30,7 +30,7 @@ training:
   online_rollout_n_episodes: 10
   online_rollout_batch_size: 10
   online_steps_between_rollouts: 1000
-  online_sampling_ratio: 0.5
+  online_sampling_ratio: 1.0
   online_env_seed: 10000
   online_buffer_capacity: 10000
   online_buffer_seed_size: 0
@@ -64,7 +64,7 @@ policy:
     observation.images.top: [3, 128, 128]
     # observation.image: [3, 128, 128]
   output_shapes:
-    action: [4] # ["${env.action_dim}"]
+    action: [3] # ["${env.action_dim}"]
 
   # Normalization / Unnormalization
   input_normalization_modes:
@@ -79,8 +79,8 @@ policy:
       mean: [0.27824220061302185, 0.2541154623031616, 0.2035747468471527]
       std: [0.21401384472846985, 0.20652416348457336, 0.1943526417016983]
     observation.state:
-      min: [0.19,  -0.06,  0.205,  0.]
-      max: [0.28,  0.1,  0.29, 0.08]
+      min: [0.19,  -0.06,  0.205] #,  0.]
+      max: [0.28,  0.1,  0.29] #, 0.08]
 
       # min: [-87.09961,     62.402344,    67.23633,     36.035156,    77.34375,0.53691274]
       # max: [58.183594,   131.83594,    145.98633,     82.08984,     78.22266, 0.60402685]
@@ -91,8 +91,8 @@ policy:
     action: min_max
   output_normalization_params:
     action:
-      max: [0.28,  0.1,  0.29, 0.08]
-      min: [0.19,  -0.06,  0.205,  0.]
+      max: [0.28,  0.1,  0.29] #, 0.08]
+      min: [0.19,  -0.06,  0.205] #,  0.]
 
   # Architecture / modeling.
   # Neural networks.
@@ -100,7 +100,7 @@ policy:
   # discount: 0.99
   discount: 0.97
   temperature_init: 1.0
-  num_critics: 10 #10
+  num_critics: 2 #10
   camera_number: 2
   num_subsample_critics: null
   critic_lr: 3e-4
@@ -108,7 +108,7 @@ policy:
   temperature_lr: 3e-4
   # critic_target_update_weight: 0.005
   critic_target_update_weight: 0.01
-  utd_ratio: 10 # 10
+  utd_ratio: 2 # 10
 
 actor_learner_config:
   learner_host: "100.82.89.58"

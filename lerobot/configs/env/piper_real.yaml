@@ -5,8 +5,8 @@ fps: 20
 env:
   name: real_world
   task: null
-  state_dim: 4
-  action_dim: 4
+  state_dim: 3
+  action_dim: 3
   fps: ${fps}
   device: cuda
   
