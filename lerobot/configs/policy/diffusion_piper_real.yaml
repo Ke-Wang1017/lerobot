@@ -5,7 +5,7 @@
 #       https://github.com/huggingface/lerobot/pull/134 for more details.
 
 seed: 100000
-dataset_repo_id: KeWangRobotics/piper_test
+dataset_repo_id: KeWangRobotics/piper_test_3
 
 override_dataset_stats:
   # TODO(rcadene, alexander-soare): should we remove image stats as well? do we use a pretrained vision model?
@@ -26,14 +26,14 @@ override_dataset_stats:
   #   max: [511.0, 511.0]
 
 training:
-  offline_steps: 60000
+  offline_steps: 80000
   online_steps: 0
   eval_freq: -1
   save_freq: 5000
   log_freq: 2500
   save_checkpoint: true
 
-  batch_size: 32
+  batch_size: 16
   grad_clip_norm: 10
   lr: 1.0e-4
   lr_scheduler: cosine
@@ -103,11 +103,12 @@ policy:
   beta_start: 0.0001
   beta_end: 0.02
   prediction_type: epsilon # epsilon / sample
+  training_noise_sampling: uniform # beta / uniform
   clip_sample: True
   clip_sample_range: 1.0
 
   # Inference
-  num_inference_steps: null  # if not provided, defaults to `num_train_timesteps`
+  num_inference_steps: 10  # if not provided, defaults to `num_train_timesteps`
 
   # Loss computation
   do_mask_loss_for_padding: false
