@@ -157,7 +157,7 @@ class SACPolicy(
     def select_action(self, batch: dict[str, Tensor]) -> Tensor:
         """Select action for inference/evaluation"""
         actions, _, _ = self.actor(batch)
-        actions = self.unnormalize_outputs({"action": actions})["action"]
+        # actions = self.unnormalize_outputs({"action": actions})["action"]
         return actions
 
     def critic_forward(
@@ -209,6 +209,10 @@ class SACPolicy(
             next_action_preds, next_log_probs, _ = self.actor(
                 next_observations, next_observation_features
             )
+
+            # next_action_preds = self.unnormalize_outputs({"action": next_action_preds})[
+            #     "action"
+            # ]
 
             # 2- compute q targets
             q_targets = self.critic_forward(
@@ -270,6 +274,7 @@ class SACPolicy(
         temperature = self.log_alpha.exp().item()
 
         actions_pi, log_probs, _ = self.actor(observations, observation_features)
+        # actions_pi = self.unnormalize_outputs({"action": actions_pi})["action"]
 
         q_preds = self.critic_forward(
             observations,
@@ -756,7 +761,7 @@ def orthogonal_init():
 
 class Identity(nn.Module):
     def __init__(self):
-        super().__init__()
+        super(Identity, self).__init__()
 
     def forward(self, x):
         return x

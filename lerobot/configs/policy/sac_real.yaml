@@ -8,7 +8,7 @@
 #   env.gym.obs_type=environment_state_agent_pos \
 
 seed: 1
-dataset_repo_id: aractingi/push_cube_overfit_cropped_resized
+dataset_repo_id: KeWangRobotics/piper_rl_3_cropped_resized
 #aractingi/push_cube_square_offline_demo_cropped_resized
 
 training:
@@ -16,13 +16,15 @@ training:
   num_workers: 4
 
   # batch_size: 256
-  batch_size: 512
+  batch_size: 256
   grad_clip_norm: 10.0
   lr: 3e-4
 
+  storage_device: "cpu"
+
   eval_freq: 2500
   log_freq: 1
-  save_freq: 2000000
+  save_freq: 200000
 
   online_steps: 1000000
   online_rollout_n_episodes: 10
@@ -30,7 +32,7 @@ training:
   online_steps_between_rollouts: 1000
   online_sampling_ratio: 1.0
   online_env_seed: 10000
-  online_buffer_capacity: 1000000
+  online_buffer_capacity: 10000
   online_buffer_seed_size: 0
   online_step_before_learning: 100 #5000
   do_online_rollout_async: false
@@ -58,42 +60,34 @@ policy:
   input_shapes:
     # # TODO(rcadene, alexander-soare): add variables for height and width from the dataset/env?
     observation.state: ["${env.state_dim}"]
-    observation.images.front: [3, 128, 128]
-    observation.images.side: [3, 128, 128]
+    observation.images.wrist: [3, 128, 128]
+    observation.images.top: [3, 128, 128]
     # observation.image: [3, 128, 128]
   output_shapes:
-    action: [4] # ["${env.action_dim}"]
+    action: [3] # ["${env.action_dim}"]
 
   # Normalization / Unnormalization
   input_normalization_modes:
-    observation.images.front: mean_std
-    observation.images.side: mean_std
+    observation.images.wrist: mean_std
+    observation.images.top: mean_std
     observation.state: min_max
   input_normalization_params:
-    observation.images.front:
-      mean: [0.485, 0.456, 0.406]
-      std: [0.229, 0.224, 0.225]
-    observation.images.side:
-      mean: [0.485, 0.456, 0.406]
-      std: [0.229, 0.224, 0.225]
+    observation.images.wrist:
+      mean: [0.1619289219379425, 0.12990622222423553, 0.09936489164829254]
+      std: [0.1582489311695099, 0.10825634747743607, 0.06002498418092728]
+    observation.images.top:
+      mean: [0.27824220061302185, 0.2541154623031616, 0.2035747468471527]
+      std: [0.21401384472846985, 0.20652416348457336, 0.1943526417016983]
     observation.state:
-      min: [-77.08008,     56.25,        60.55664,     19.511719,   0., -0.63829786]
-      max: [ 7.215820e+01,  1.5398438e+02,  1.6075195e+02,  9.3251953e+01, 0., -1.4184397e-01]
-
-      # min: [-87.09961,     62.402344,    67.23633,     36.035156,    77.34375,0.53691274]
-      # max: [58.183594,   131.83594,    145.98633,     82.08984,     78.22266, 0.60402685]
-      # min: [-88.50586,  23.81836, 0.87890625, -32.16797, 78.66211,   0.53691274]
-      # max: [84.55078, 187.11914, 145.98633, 101.60156, 146.60156,  88.18792]
+      min: [0.19,  -0.06,  0.205] #,  0.]
+      max: [0.28,  0.1,  0.29] #, 0.08]
 
   output_normalization_modes:
     action: min_max
   output_normalization_params:
-    # action:
-    #   min: [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
-    #   max: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     action:
-      min: [-149.23828125, -97.734375, -100.1953125, -73.740234375]
-      max: [149.23828125, 97.734375, 100.1953125, 73.740234375]
+      max: [0.28,  0.1,  0.29] #, 0.08]
+      min: [0.19,  -0.06,  0.205] #,  0.]
 
   # Architecture / modeling.
   # Neural networks.
@@ -112,7 +106,7 @@ policy:
   utd_ratio: 2 # 10
 
 actor_learner_config:
-  learner_host: "127.0.0.1"
+  learner_host: "0.0.0.0"
   learner_port: 50051
   policy_parameters_push_frequency: 15
 
@@ -126,3 +120,9 @@ actor_learner_config:
   # temporal_decay_coeff: 0.5
   # # Target model.
   # target_model_momentum: 0.995
+wandb:
+  enable: true
+  # Set to true to disable saving an artifact despite save_checkpoint == True
+  disable_artifact: true
+  project: lerobot
+  notes: "HIL-SERL Piper"

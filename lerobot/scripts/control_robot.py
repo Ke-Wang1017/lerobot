@@ -92,7 +92,12 @@ python lerobot/scripts/control_robot.py record \
     -p outputs/train/act_koch_real/checkpoints/080000/pretrained_model
 ```
 """
+import cv2
 
+# Make sure that the UI gets initialized before PyAV (av) gets imported by torchvision
+# This solves the hanging issue with cv2.imshow on Ubuntu
+cv2.namedWindow("i")
+cv2.destroyAllWindows()
 import argparse
 import logging
 import time
@@ -118,12 +123,7 @@ from lerobot.common.robot_devices.control_utils import (
 from lerobot.common.robot_devices.robots.factory import make_robot
 from lerobot.common.robot_devices.robots.utils import Robot
 from lerobot.common.robot_devices.utils import busy_wait, safe_disconnect
-from lerobot.common.utils.utils import (
-    init_hydra_config,
-    init_logging,
-    log_say,
-    none_or_int,
-)
+from lerobot.common.utils.utils import init_hydra_config, init_logging, log_say, none_or_int
 
 ########################################################################################
 # Control modes
@@ -178,10 +178,7 @@ def calibrate(robot: Robot, arms: list[str] | None):
 
 @safe_disconnect
 def teleoperate(
-    robot: Robot,
-    fps: int | None = None,
-    teleop_time_s: float | None = None,
-    display_cameras: bool = False,
+    robot: Robot, fps: int | None = None, teleop_time_s: float | None = None, display_cameras: bool = False
 ):
     control_loop(
         robot,
@@ -212,7 +209,8 @@ def record(
     tags: list[str] | None = None,
     num_image_writer_processes: int = 0,
     num_image_writer_threads_per_camera: int = 4,
-    display_cameras: bool = True,
+    # display_cameras: bool = True,
+    display_cameras: bool = False,
     play_sounds: bool = True,
     reset_follower: bool = False,
     record_delta_actions: bool = False,
@@ -242,15 +240,11 @@ def record(
 
     # Load pretrained policy
     if pretrained_policy_name_or_path is not None:
-        policy, policy_fps, device, use_amp = init_policy(
-            pretrained_policy_name_or_path, policy_overrides
-        )
+        policy, policy_fps, device, use_amp = init_policy(pretrained_policy_name_or_path, policy_overrides)
 
         if fps is None:
             fps = policy_fps
-            logging.warning(
-                f"No fps provided, so using the fps from policy config ({policy_fps})."
-            )
+            logging.warning(f"No fps provided, so using the fps from policy config ({policy_fps}).")
         elif fps != policy_fps:
             logging.warning(
                 f"There is a mismatch between the provided fps ({fps}) and the one from policy config ({policy_fps})."
@@ -266,9 +260,7 @@ def record(
             num_processes=num_image_writer_processes,
             num_threads=num_image_writer_threads_per_camera * len(robot.cameras),
         )
-        sanity_check_dataset_robot_compatibility(
-            dataset, robot, fps, video, extra_features
-        )
+        sanity_check_dataset_robot_compatibility(dataset, robot, fps, video, extra_features)
     else:
         # Create empty dataset or load existing saved episodes
         sanity_check_dataset_name(repo_id, policy)
@@ -279,8 +271,7 @@ def record(
             robot=robot,
             use_videos=video,
             image_writer_processes=num_image_writer_processes,
-            image_writer_threads=num_image_writer_threads_per_camera
-            * len(robot.cameras),
+            image_writer_threads=num_image_writer_threads_per_camera * len(robot.cameras),
             features=extra_features,
         )
 
@@ -297,9 +288,7 @@ def record(
     # 3. place the cameras windows on screen
     enable_teleoperation = policy is None
     log_say("Warmup record", play_sounds)
-    warmup_record(
-        robot, events, enable_teleoperation, warmup_time_s, display_cameras, fps
-    )
+    warmup_record(robot, events, enable_teleoperation, warmup_time_s, display_cameras, fps)
 
     if has_method(robot, "teleop_safety_stop"):
         robot.teleop_safety_stop()
@@ -336,6 +325,8 @@ def record(
             (recorded_episodes < num_episodes - 1) or events["rerecord_episode"]
         ):
             log_say("Reset the environment", play_sounds)
+            if robot.robot_type == "piper":
+                robot.move_to_home_2()
             if reset_follower:
                 reset_follower_position(robot, initial_position)
             reset_environment(robot, events, reset_time_s)
@@ -382,9 +373,7 @@ def replay(
     # TODO(rcadene, aliberts): refactor with control_loop, once `dataset` is an instance of LeRobotDataset
     # TODO(rcadene): Add option to record logs
 
-    dataset = LeRobotDataset(
-        repo_id, root=root, episodes=[episode], local_files_only=local_files_only
-    )
+    dataset = LeRobotDataset(repo_id, root=root, episodes=[episode], local_files_only=local_files_only)
     actions = dataset.hf_dataset.select_columns("action")
     if not robot.is_connected:
         robot.connect()
@@ -435,25 +424,19 @@ if __name__ == "__main__":
 
     parser_teleop = subparsers.add_parser("teleoperate", parents=[base_parser])
     parser_teleop.add_argument(
-        "--fps",
-        type=none_or_int,
-        default=None,
-        help="Frames per second (set to None to disable)",
+        "--fps", type=none_or_int, default=None, help="Frames per second (set to None to disable)"
     )
     parser_teleop.add_argument(
         "--display-cameras",
         type=int,
-        default=1,
+        default=0,
         help="Display all cameras on screen (set to 1 to display or 0).",
     )
 
     parser_record = subparsers.add_parser("record", parents=[base_parser])
     task_args = parser_record.add_mutually_exclusive_group(required=True)
     parser_record.add_argument(
-        "--fps",
-        type=none_or_int,
-        default=None,
-        help="Frames per second (set to None to disable)",
+        "--fps", type=none_or_int, default=None, help="Frames per second (set to None to disable)"
     )
     task_args.add_argument(
         "--single-task",
@@ -502,9 +485,7 @@ if __name__ == "__main__":
         default=60,
         help="Number of seconds for resetting the environment after each episode.",
     )
-    parser_record.add_argument(
-        "--num-episodes", type=int, default=50, help="Number of episodes to record."
-    )
+    parser_record.add_argument("--num-episodes", type=int, default=50, help="Number of episodes to record.")
     parser_record.add_argument(
         "--run-compute-stats",
         type=int,
@@ -586,10 +567,7 @@ if __name__ == "__main__":
 
     parser_replay = subparsers.add_parser("replay", parents=[base_parser])
     parser_replay.add_argument(
-        "--fps",
-        type=none_or_int,
-        default=None,
-        help="Frames per second (set to None to disable)",
+        "--fps", type=none_or_int, default=None, help="Frames per second (set to None to disable)"
     )
     parser_replay.add_argument(
         "--root",
@@ -615,9 +593,7 @@ if __name__ == "__main__":
         default=0,
         help="Enables the replay of delta actions instead of absolute actions.",
     )
-    parser_replay.add_argument(
-        "--episode", type=int, default=0, help="Index of the episode to replay."
-    )
+    parser_replay.add_argument("--episode", type=int, default=0, help="Index of the episode to replay.")
 
     args = parser.parse_args()
 
