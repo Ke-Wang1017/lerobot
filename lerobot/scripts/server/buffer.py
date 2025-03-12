@@ -447,11 +447,11 @@ class ReplayBuffer:
             first_action = first_transition["action"].to(device)
 
             # Apply action mask/delta if needed
-            if action_mask is not None:
-                if first_action.dim() == 1:
-                    first_action = first_action[action_mask]
-                else:
-                    first_action = first_action[:, action_mask]
+            # if action_mask is not None:
+            #     if first_action.dim() == 1:
+            #         first_action = first_action[action_mask]
+            #     else:
+            #         first_action = first_action[:, action_mask]
 
             if action_delta is not None:
                 first_action = first_action / action_delta
@@ -468,11 +468,11 @@ class ReplayBuffer:
                     data[k] = v.to(device)
 
             action = data["action"]
-            if action_mask is not None:
-                if action.dim() == 1:
-                    action = action[action_mask]
-                else:
-                    action = action[:, action_mask]
+            # if action_mask is not None:
+            #     if action.dim() == 1:
+            #         action = action[action_mask]
+            #     else:
+            #         action = action[:, action_mask]
 
             if action_delta is not None:
                 action = action / action_delta

@@ -1,0 +1,30 @@
+# @package _global_
+
+fps: 20
+
+env:
+  name: real_world
+  task: null
+  state_dim: 3
+  action_dim: 3
+  fps: ${fps}
+  device: cuda
+  
+  wrapper:
+    crop_params_dict:
+      observation.images.wrist: [169, 12, 306, 623]
+      observation.images.top: [272, 63, 138, 449]
+      # observation.images.front: [109, 37, 361, 557]
+      # observation.images.side: [94, 161, 372, 315]
+    resize_size: [128, 128]
+    control_time_s: 30
+    # reset_follower_pos: true
+    use_relative_joint_positions: true
+    reset_time_s: 10
+    display_cameras: false
+    delta_action: 0.3
+    joint_masking_action_space: None # disable wrist and gripper
+
+  reward_classifier:
+    pretrained_path: None
+    config_path: lerobot/configs/policy/hilserl_classifier.yaml

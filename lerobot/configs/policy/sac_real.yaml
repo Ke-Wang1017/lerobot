@@ -8,15 +8,14 @@
 #   env.gym.obs_type=environment_state_agent_pos \
 
 seed: 1
-dataset_repo_id: KeWangRobotics/piper_rl_3_cropped_resized
-#aractingi/push_cube_square_offline_demo_cropped_resized
+dataset_repo_id: KeWangRobotics/piper_rl_4_cropped_resized
 
 training:
   # Offline training dataloader
   num_workers: 4
 
   # batch_size: 256
-  batch_size: 256
+  batch_size: 64
   grad_clip_norm: 10.0
   lr: 3e-4
 
@@ -24,15 +23,15 @@ training:
 
   eval_freq: 2500
   log_freq: 1
-  save_freq: 200000
+  save_freq: 20000
 
   online_steps: 1000000
   online_rollout_n_episodes: 10
   online_rollout_batch_size: 10
   online_steps_between_rollouts: 1000
-  online_sampling_ratio: 1.0
+  online_sampling_ratio: 0.5
   online_env_seed: 10000
-  online_buffer_capacity: 10000
+  online_buffer_capacity: 2048
   online_buffer_seed_size: 0
   online_step_before_learning: 100 #5000
   do_online_rollout_async: false
@@ -73,11 +72,11 @@ policy:
     observation.state: min_max
   input_normalization_params:
     observation.images.wrist:
-      mean: [0.1619289219379425, 0.12990622222423553, 0.09936489164829254]
-      std: [0.1582489311695099, 0.10825634747743607, 0.06002498418092728]
+      mean: [0.12514418363571167, 0.10215409845113754, 0.09941400587558746]
+      std: [0.13340850174427032, 0.09106286615133286, 0.04595724120736122]
     observation.images.top:
-      mean: [0.27824220061302185, 0.2541154623031616, 0.2035747468471527]
-      std: [0.21401384472846985, 0.20652416348457336, 0.1943526417016983]
+      mean: [0.2728222608566284, 0.2521352469921112, 0.1942160725593567]
+      std: [0.20000086724758148, 0.19260407984256744, 0.19403192400932312]
     observation.state:
       min: [0.19,  -0.06,  0.205] #,  0.]
       max: [0.28,  0.1,  0.29] #, 0.08]
@@ -95,7 +94,7 @@ policy:
   # discount: 0.99
   discount: 0.97
   temperature_init: 1.0
-  num_critics: 2 #10
+  num_critics: 10 #10
   camera_number: 2
   num_subsample_critics: null
   critic_lr: 3e-4
@@ -103,12 +102,15 @@ policy:
   temperature_lr: 3e-4
   # critic_target_update_weight: 0.005
   critic_target_update_weight: 0.01
-  utd_ratio: 2 # 10
+  utd_ratio: 10 # 10
 
 actor_learner_config:
   learner_host: "0.0.0.0"
   learner_port: 50051
   policy_parameters_push_frequency: 15
+  concurrency:
+    actor: "threads"
+    learner: "threads"
 
   # # Loss coefficients.
   # reward_coeff: 0.5
