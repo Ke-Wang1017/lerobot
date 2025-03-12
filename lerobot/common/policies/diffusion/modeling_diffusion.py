@@ -240,7 +240,7 @@ class DiffusionModel(nn.Module):
         dtype = get_dtype_from_parameters(self)
         timesteps = self.num_inference_steps 
         x_0 = torch.randn(
-            size=(batch_size, self.config.horizon, self.config.action_feature.shape[0]),
+            size=(batch_size, self.config.horizon, self.config.output_shapes["action"][0]),
             dtype=dtype,
             device=device,
             generator=generator,

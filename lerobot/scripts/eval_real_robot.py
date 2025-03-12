@@ -12,7 +12,7 @@ warmup_time_s = 3
 fps = 30
 device = "cuda"  # TODO: On Mac, use "mps" or "cpu"
 
-ckpt_path = "lerobot/policy/piper_diffusion"
+ckpt_path = "lerobot/policy/flow_match_60k"
 # ckpt_path = "outputs/train/2025-02-02/23-39-04_real_world_act_default/checkpoints/060000/pretrained_model"
 policy = DiffusionPolicy.from_pretrained(ckpt_path, local_files_only=False)
 # policy = ACTPolicy.from_pretrained(ckpt_path, local_files_only=False)
