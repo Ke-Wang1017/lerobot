@@ -179,6 +179,8 @@ class IntelRealSenseCameraConfig:
     force_hardware_reset: bool = True
     rotation: int | None = None
     mock: bool = False
+    flip_horizontal: bool = False
+    flip_vertical: bool = False
 
     def __post_init__(self):
         if self.color_mode not in ["rgb", "bgr"]:
@@ -274,6 +276,8 @@ class IntelRealSenseCamera:
         self.use_depth = config.use_depth
         self.force_hardware_reset = config.force_hardware_reset
         self.mock = config.mock
+        self.flip_horizontal = config.flip_horizontal
+        self.flip_vertical = config.flip_vertical
 
         self.camera = None
         self.is_connected = False
@@ -281,7 +285,8 @@ class IntelRealSenseCamera:
         self.stop_event = None
         self.color_image = None
         self.depth_map = None
-        self.logs = {}
+        self.logs = {"delta_timestamp_s": 0.0}
+        self.last_timestamp = time.time()
 
         if self.mock:
             import tests.mock_cv2 as cv2
@@ -402,98 +407,59 @@ class IntelRealSenseCamera:
         self.width = round(actual_width)
         self.height = round(actual_height)
 
+        # Reset timestamp when connecting
+        self.last_timestamp = time.time()
+        self.logs["delta_timestamp_s"] = 0.0
+
         self.is_connected = True
 
-    def read(
-        self, temporary_color: str | None = None
-    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-        """Read a frame from the camera returned in the format height x width x channels (e.g. 480 x 640 x 3)
-        of type `np.uint8`, contrarily to the pytorch format which is float channel first.
-
-        When `use_depth=True`, returns a tuple `(color_image, depth_map)` with a depth map in the format
-        height x width (e.g. 480 x 640) of type np.uint16.
-
-        Note: Reading a frame is done every `camera.fps` times per second, and it is blocking.
-        If you are reading data from other sensors, we advise to use `camera.async_read()` which is non blocking version of `camera.read()`.
-        """
-        if not self.is_connected:
-            raise RobotDeviceNotConnectedError(
-                f"IntelRealSenseCamera({self.serial_number}) is not connected. Try running `camera.connect()` first."
-            )
-
-        if self.mock:
-            import tests.mock_cv2 as cv2
-        else:
-            import cv2
-
-        start_time = time.perf_counter()
-
-        frame = self.camera.wait_for_frames(timeout_ms=5000)
-
-        color_frame = frame.get_color_frame()
-
-        if not color_frame:
-            raise OSError(
-                f"Can't capture color image from IntelRealSenseCamera({self.serial_number})."
-            )
-
-        color_image = np.asanyarray(color_frame.get_data())
-
-        requested_color_mode = (
-            self.color_mode if temporary_color is None else temporary_color
-        )
-        if requested_color_mode not in ["rgb", "bgr"]:
-            raise ValueError(
-                f"Expected color values are 'rgb' or 'bgr', but {requested_color_mode} is provided."
-            )
-
-        # IntelRealSense uses RGB format as default (red, green, blue).
-        if requested_color_mode == "bgr":
-            color_image = cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR)
-
-        h, w, _ = color_image.shape
-        if h != self.height or w != self.width:
-            raise OSError(
-                f"Can't capture color image with expected height and width ({self.height} x {self.width}). ({h} x {w}) returned instead."
-            )
-
-        if self.rotation is not None:
-            color_image = cv2.rotate(color_image, self.rotation)
-
-        # log the number of seconds it took to read the image
-        self.logs["delta_timestamp_s"] = time.perf_counter() - start_time
-
-        # log the utc time at which the image was received
-        self.logs["timestamp_utc"] = capture_timestamp_utc()
-
-        if self.use_depth:
-            depth_frame = frame.get_depth_frame()
-            if not depth_frame:
-                raise OSError(
-                    f"Can't capture depth image from IntelRealSenseCamera({self.serial_number})."
-                )
-
-            depth_map = np.asanyarray(depth_frame.get_data())
-
-            h, w = depth_map.shape
-            if h != self.height or w != self.width:
-                raise OSError(
-                    f"Can't capture depth map with expected height and width ({self.height} x {self.width}). ({h} x {w}) returned instead."
-                )
-
-            if self.rotation is not None:
-                depth_map = cv2.rotate(depth_map, self.rotation)
-
-            return color_image, depth_map
-        else:
+    def read(self):
+        """Read a frame from the camera."""
+        try:
+            frame = self.camera.wait_for_frames(timeout_ms=5000)
+            color_frame = frame.get_color_frame()
+            if not color_frame:
+                logging.warning("Failed to get color frame, returning previous frame if available")
+                return self.color_image if hasattr(self, 'color_image') else None
+            
+            # Get the color frame data
+            color_image = np.asanyarray(color_frame.get_data())
+            
+            # Apply transformations if needed
+            if self.flip_horizontal:
+                color_image = np.fliplr(color_image)
+            if self.flip_vertical:
+                color_image = np.flipud(color_image)
+            
             return color_image
+        except RuntimeError as e:
+            logging.warning(f"Frame timeout: {str(e)}. Returning previous frame if available.")
+            return self.color_image if hasattr(self, 'color_image') else None
 
     def read_loop(self):
-        while not self.stop_event.is_set():
-            if self.use_depth:
-                self.color_image, self.depth_map = self.read()
-            else:
-                self.color_image = self.read()
+        """Read frames in a loop."""
+        while self.is_connected:
+            try:
+                new_image = self.read()
+                if new_image is not None:
+                    self.color_image = new_image
+                    self.logs["delta_timestamp_s"] = time.time() - self.last_timestamp
+                    self.last_timestamp = time.time()
+                else:
+                    # If read() returned None and we don't have a previous frame yet
+                    if not hasattr(self, 'color_image') or self.color_image is None:
+                        logging.warning("No valid frame available yet, sleeping briefly")
+                        time.sleep(0.1)
+                        continue
+                    # Otherwise we're using the previous frame, so just update timestamp
+                    self.logs["delta_timestamp_s"] = time.time() - self.last_timestamp
+                    self.last_timestamp = time.time()
+                
+                time.sleep(1.0 / self.fps)
+            except Exception as e:
+                logging.error(f"Error in camera read loop: {str(e)}")
+                # Don't crash the loop on errors
+                time.sleep(0.1)
 
     def async_read(self):
         """Access the latest color image"""
@@ -504,13 +470,13 @@ class IntelRealSenseCamera:
 
         if self.thread is None:
             self.stop_event = threading.Event()
+            self.last_timestamp = time.time()  # Initialize timestamp before starting thread
             self.thread = Thread(target=self.read_loop, args=())
             self.thread.daemon = True
             self.thread.start()
 
         num_tries = 0
         while self.color_image is None:
-            # TODO(rcadene, aliberts): intelrealsense has diverged compared to opencv over here
             num_tries += 1
             time.sleep(1 / self.fps)
             if num_tries > self.fps and (
@@ -519,6 +485,11 @@ class IntelRealSenseCamera:
                 raise Exception(
                     "The thread responsible for `self.async_read()` took too much time to start. There might be an issue. Verify that `self.thread.start()` has been called."
                 )
+
+        # Ensure logs has delta_timestamp_s even if read_loop hasn't updated it yet
+        if "delta_timestamp_s" not in self.logs:
+            self.logs["delta_timestamp_s"] = time.time() - self.last_timestamp
+            self.last_timestamp = time.time()
 
         if self.use_depth:
             return self.color_image, self.depth_map

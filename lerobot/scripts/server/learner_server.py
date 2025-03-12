@@ -482,8 +482,8 @@ def add_actor_information_and_train(
 
             if cfg.dataset_repo_id is not None:
                 batch_offline = offline_replay_buffer.sample(batch_size)
-                # batch = concatenate_batch_transitions(batch, batch_offline)
                 batch = batch_offline
+                # batch = concatenate_batch_transitions(batch, batch_offline)
 
             actions = batch["action"]
             rewards = batch["reward"]
@@ -516,9 +516,6 @@ def add_actor_information_and_train(
             batch_offline = offline_replay_buffer.sample(batch_size)
             # batch = concatenate_batch_transitions(
             #     left_batch_transitions=batch, right_batch_transition=batch_offline
-            # )
-            # batch = concatenate_batch_transitions(
-            #     left_batch_transitions=batch_offline, right_batch_transition=batch_offline
             # )
             batch = batch_offline
 

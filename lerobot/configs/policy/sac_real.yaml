@@ -105,7 +105,7 @@ policy:
   utd_ratio: 10 # 10
 
 actor_learner_config:
-  learner_host: "0.0.0.0"
+  learner_host: "100.89.106.161"
   learner_port: 50051
   policy_parameters_push_frequency: 15
   concurrency:
