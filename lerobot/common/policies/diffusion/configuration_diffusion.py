@@ -150,6 +150,7 @@ class DiffusionConfig:
      )
     clip_sample: bool = True
     clip_sample_range: float = 1.0
+    use_flow_matching: bool = True
 
     # Inference
     num_inference_steps: int | None = None

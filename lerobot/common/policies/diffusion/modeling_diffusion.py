@@ -195,40 +195,41 @@ class DiffusionModel(nn.Module):
 
         self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps)
 
-        self.noise_scheduler = _make_noise_scheduler(
-            config.noise_scheduler_type,
-            num_train_timesteps=config.num_train_timesteps,
-            beta_start=config.beta_start,
-            beta_end=config.beta_end,
-            beta_schedule=config.beta_schedule,
-            clip_sample=config.clip_sample,
-            clip_sample_range=config.clip_sample_range,
-            prediction_type=config.prediction_type,
-        )
-
+        if config.use_flow_matching:
+            if config.training_noise_sampling == "uniform":
+                self.noise_distribution = torch.distributions.Uniform(
+                    low=0,
+                    high=1,
+                )
+            elif config.training_noise_sampling == "beta":
+                # From the Pi0 paper, https://www.physicalintelligence.company/download/pi0.pdf Appendix B.
+                # There, they say the PDF for the distribution they use is the following:
+                # $p(t) = Beta((s-t) / s; 1.5, 1)$
+                # So, we first figure out the distribution over $t'$ and then transform it to $t = s - s * t'$.
+                s = 0.999  # constant from the paper
+                beta_dist = torch.distributions.Beta(
+                    concentration1=1.5,  # alpha
+                    concentration0=1.0,  # beta
+                )
+                affine_transform = torch.distributions.transforms.AffineTransform(loc=s, scale=-s)
+                self.noise_distribution = torch.distributions.TransformedDistribution(
+                    beta_dist, [affine_transform]
+                )
+        else:
+            self.noise_scheduler = _make_noise_scheduler(
+                                    config.noise_scheduler_type,
+                                    num_train_timesteps=config.num_train_timesteps,
+                                    beta_start=config.beta_start,
+                                    beta_end=config.beta_end,
+                                    beta_schedule=config.beta_schedule,
+                                    clip_sample=config.clip_sample,
+                                    clip_sample_range=config.clip_sample_range,
+                                    prediction_type=config.prediction_type,
+                                )
         if config.num_inference_steps is None:
             self.num_inference_steps = self.noise_scheduler.config.num_train_timesteps
         else:
             self.num_inference_steps = config.num_inference_steps
-        if config.training_noise_sampling == "uniform":
-            self.noise_distribution = torch.distributions.Uniform(
-                low=0,
-                high=1,
-            )
-        elif config.training_noise_sampling == "beta":
-            # From the Pi0 paper, https://www.physicalintelligence.company/download/pi0.pdf Appendix B.
-            # There, they say the PDF for the distribution they use is the following:
-            # $p(t) = Beta((s-t) / s; 1.5, 1)$
-            # So, we first figure out the distribution over $t'$ and then transform it to $t = s - s * t'$.
-            s = 0.999  # constant from the paper
-            beta_dist = torch.distributions.Beta(
-                concentration1=1.5,  # alpha
-                concentration0=1.0,  # beta
-            )
-            affine_transform = torch.distributions.transforms.AffineTransform(loc=s, scale=-s)
-            self.noise_distribution = torch.distributions.TransformedDistribution(
-                beta_dist, [affine_transform]
-            )
         self.clip_sample=config.clip_sample,
         self.clip_sample_range=config.clip_sample_range
 
@@ -238,47 +239,48 @@ class DiffusionModel(nn.Module):
     ) -> Tensor:
         device = get_device_from_parameters(self)
         dtype = get_dtype_from_parameters(self)
-        timesteps = self.num_inference_steps 
-        x_0 = torch.randn(
-            size=(batch_size, self.config.horizon, self.config.output_shapes["action"][0]),
-            dtype=dtype,
-            device=device,
-            generator=generator,
-        )
-        dt = 1.0 / timesteps
-        t_all = (
-            torch.arange(timesteps, device=device).float().unsqueeze(0).expand(batch_size, timesteps)
-            / timesteps
-        )
+        if self.config.use_flow_matching:
+            timesteps = self.num_inference_steps 
+            x_0 = torch.randn(
+                size=(batch_size, self.config.horizon, self.config.output_shapes["action"][0]),
+                dtype=dtype,
+                device=device,
+                generator=generator,
+            )
+            dt = 1.0 / timesteps
+            t_all = (
+                torch.arange(timesteps, device=device).float().unsqueeze(0).expand(batch_size, timesteps)
+                / timesteps
+            )
 
-        for k in range(timesteps):
-            t = t_all[:, k]
-            x_0 = x_0 + dt * self.unet(x_0, t, global_cond)
-            if self.clip_sample:
-                x_0 = torch.clamp(x_0, -self.clip_sample_range, self.clip_sample_range)
-        return x_0
+            for k in range(timesteps):
+                t = t_all[:, k]
+                x_0 = x_0 + dt * self.unet(x_0, t, global_cond)
+                if self.clip_sample:
+                    x_0 = torch.clamp(x_0, -self.clip_sample_range, self.clip_sample_range)
+            return x_0
+        else:
+            # Sample prior.
+            sample = torch.randn(
+                size=(batch_size, self.config.horizon, self.config.output_shapes["action"][0]),
+                dtype=dtype,
+                device=device,
+                generator=generator,
+            )
 
-        # # Sample prior.
-        # sample = torch.randn(
-        #     size=(batch_size, self.config.horizon, self.config.output_shapes["action"][0]),
-        #     dtype=dtype,
-        #     device=device,
-        #     generator=generator,
-        # )
+            self.noise_scheduler.set_timesteps(self.num_inference_steps)
 
-        # self.noise_scheduler.set_timesteps(self.num_inference_steps)
+            for t in self.noise_scheduler.timesteps:
+                # Predict model output.
+                model_output = self.unet(
+                    sample,
+                    torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device),
+                    global_cond=global_cond,
+                )
+                # Compute previous image: x_t -> x_t-1
+                sample = self.noise_scheduler.step(model_output, t, sample, generator=generator).prev_sample
 
-        # for t in self.noise_scheduler.timesteps:
-        #     # Predict model output.
-        #     model_output = self.unet(
-        #         sample,
-        #         torch.full(sample.shape[:1], t, dtype=torch.long, device=sample.device),
-        #         global_cond=global_cond,
-        #     )
-        #     # Compute previous image: x_t -> x_t-1
-        #     sample = self.noise_scheduler.step(model_output, t, sample, generator=generator).prev_sample
-
-        # return sample
+            return sample
 
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode image features and concatenate them all together along with the state vector."""
@@ -372,40 +374,41 @@ class DiffusionModel(nn.Module):
 
         # Forward diffusion.
         trajectory = batch["action"]
-        # Sample noise to add to the trajectory.
-        noise = torch.randn(trajectory.shape, device=trajectory.device)
-        # Sample a random noising timestep for each item in the batch.
-        timesteps = self.noise_distribution.sample((trajectory.shape[0],)).to(trajectory.device)
-        # Add noise to the clean trajectories according to the noise magnitude at each timestep.
-        noisy_trajectory = (1 - timesteps[:, None, None]) * noise + timesteps[:, None, None] * trajectory
+        if self.config.use_flow_matching:
+            # Sample noise to add to the trajectory.
+            noise = torch.randn(trajectory.shape, device=trajectory.device)
+            # Sample a random noising timestep for each item in the batch.
+            timesteps = self.noise_distribution.sample((trajectory.shape[0],)).to(trajectory.device)
+            # Add noise to the clean trajectories according to the noise magnitude at each timestep.
+            noisy_trajectory = (1 - timesteps[:, None, None]) * noise + timesteps[:, None, None] * trajectory
 
+            # Run the denoising network (that might denoise the trajectory, or attempt to predict the noise).
+            pred = self.unet(noisy_trajectory, timesteps, global_cond=global_cond)
+            target = trajectory - noise
+        else:
+            # Sample noise to add to the trajectory.
+            eps = torch.randn(trajectory.shape, device=trajectory.device)
+            # Sample a random noising timestep for each item in the batch.
+            timesteps = torch.randint(
+                low=0,
+                high=self.noise_scheduler.config.num_train_timesteps,
+                size=(trajectory.shape[0],),
+                device=trajectory.device,
+            ).long()
+            # Add noise to the clean trajectories according to the noise magnitude at each timestep.
+            noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
 
-        # Run the denoising network (that might denoise the trajectory, or attempt to predict the noise).
-        pred = self.unet(noisy_trajectory, timesteps, global_cond=global_cond)
-        target = trajectory - noise
-        # # Sample noise to add to the trajectory.
-        # eps = torch.randn(trajectory.shape, device=trajectory.device)
-        # # Sample a random noising timestep for each item in the batch.
-        # timesteps = torch.randint(
-        #     low=0,
-        #     high=self.noise_scheduler.config.num_train_timesteps,
-        #     size=(trajectory.shape[0],),
-        #     device=trajectory.device,
-        # ).long()
-        # # Add noise to the clean trajectories according to the noise magnitude at each timestep.
-        # noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
+            # Run the denoising network (that might denoise the trajectory, or attempt to predict the noise).
+            pred = self.unet(noisy_trajectory, timesteps, global_cond=global_cond)
 
-        # # Run the denoising network (that might denoise the trajectory, or attempt to predict the noise).
-        # pred = self.unet(noisy_trajectory, timesteps, global_cond=global_cond)
-
-        # # Compute the loss.
-        # # The target is either the original trajectory, or the noise.
-        # if self.config.prediction_type == "epsilon":
-        #     target = eps
-        # elif self.config.prediction_type == "sample":
-        #     target = batch["action"]
-        # else:
-        #     raise ValueError(f"Unsupported prediction type {self.config.prediction_type}")
+            # Compute the loss.
+            # The target is either the original trajectory, or the noise.
+            if self.config.prediction_type == "epsilon":
+                target = eps
+            elif self.config.prediction_type == "sample":
+                target = batch["action"]
+            else:
+                raise ValueError(f"Unsupported prediction type {self.config.prediction_type}")
 
         loss = F.mse_loss(pred, target, reduction="none")
 
