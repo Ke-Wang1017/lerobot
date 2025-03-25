@@ -597,14 +597,14 @@ def actor_cli(cfg: dict):
     # HACK: FOR MANISKILL we do not have a reward classifier
     # TODO: Remove this once we merge into main
     reward_classifier = None
-    if (
-        cfg.env.reward_classifier.pretrained_path is not None
-        and cfg.env.reward_classifier.config_path is not None
-    ):
-        reward_classifier = get_classifier(
-            pretrained_path=cfg.env.reward_classifier.pretrained_path,
-            config_path=cfg.env.reward_classifier.config_path,
-        )
+    # if (
+    #     cfg.env.reward_classifier.pretrained_path is not None
+    #     and cfg.env.reward_classifier.config_path is not None
+    # ):
+    #     reward_classifier = get_classifier(
+    #         pretrained_path=cfg.env.reward_classifier.pretrained_path,
+    #         config_path=cfg.env.reward_classifier.config_path,
+    #     )
 
     act_with_policy(
         cfg,

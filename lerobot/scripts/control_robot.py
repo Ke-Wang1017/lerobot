@@ -98,7 +98,12 @@ import logging
 import time
 from pathlib import Path
 from typing import List
+import cv2
 
+# Make sure that the UI gets initialized before PyAV (av) gets imported by torchvision
+# This solves the hanging issue with cv2.imshow on Ubuntu
+cv2.namedWindow("i")
+cv2.destroyAllWindows()
 # from safetensors.torch import load_file, save_file
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.common.robot_devices.control_utils import (
