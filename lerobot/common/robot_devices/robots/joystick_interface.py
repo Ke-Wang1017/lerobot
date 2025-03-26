@@ -87,7 +87,7 @@ class JoystickInterface:
     def _read_joystick(self):
         """Add a try-except to prevent thread crashes"""
         action = [0.0] * 6
-        buttons = [False, False, False, False]
+        buttons = [False, False, False, False, False]
         
         while True:
             try:
@@ -133,8 +133,9 @@ class JoystickInterface:
                      # Indicate recording is starting, X button on xbox controller
                     elif event.code == 'BTN_NORTH':
                         buttons[3] = bool(event.state)
-
-                
+                    # Start intervention, A button on xbox controller
+                    elif event.code == 'BTN_SOUTH':
+                        buttons[4] = bool(event.state)
 
                 # Update the shared state
                 self.latest_data["action"] = action
@@ -170,7 +171,7 @@ class JoystickIntervention():
     def __init__(self, controller_type=ControllerType.XBOX, gripper_enabled=True):
         self.gripper_enabled = gripper_enabled
         self.expert = JoystickInterface(controller_type=controller_type)
-        self.left, self.right, self.home, self.intervention_start = False, False, False, False
+        self.left, self.right, self.home, self.intervention_start, self.success = False, False, False, False, False
 
     def action(self) -> np.ndarray:
         """
@@ -180,9 +181,9 @@ class JoystickIntervention():
         deadzone = 0.003
 
         expert_a, buttons = self.expert.get_action()
-        self.left, self.right, self.home, self.intervention_start = tuple(buttons)
+        self.left, self.right, self.home, self.intervention_start, self.success = tuple(buttons)
         import logging
-        # logging.info(f"Intervention on joystick: {self.intervention_start}")
+        logging.info(f"success on joystick: {self.success}")
 
         for i, a in enumerate(expert_a):
             if abs(a) <= deadzone:
@@ -204,8 +205,8 @@ class JoystickIntervention():
 
     def get_intervention_start(self) -> bool:
         _, buttons = self.expert.get_action()
-        _, _, _, self.intervention_start = tuple(buttons)
-        return self.intervention_start
+        _, _, _, self.intervention_start, self.success = tuple(buttons)
+        return self.intervention_start, self.success
     
     def close(self):
         self.expert.close()

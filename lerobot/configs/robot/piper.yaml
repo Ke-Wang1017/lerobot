@@ -11,8 +11,8 @@ fps: 10
 # the number of motors in your follower arms.
 max_relative_target: null
 joint_position_relative_bounds: # [x y z gripper]
-  max: [0.28,  0.1, 0.29] #, 0.08]
-  min: [0.19,  -0.06, 0.205] #,  0.]
+  max: [0.345, 0.065, 0.178] #, 0.08]
+  min: [0.19,  -0.085, 0.16] #,  0.]
 
 leader_arms:
   main:

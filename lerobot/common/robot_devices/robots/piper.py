@@ -428,9 +428,9 @@ class PiperRobot(ManipulatorRobot):
         if self.teleop is not None:
             self.teleop.close()
 
-        if len(self.cameras) > 0:
-            for cam in self.cameras.values():
-                cam.disconnect()
+        # if len(self.cameras) > 0:
+        #     for cam in self.cameras.values():
+        #         cam.disconnect()
 
         self.is_connected = False
 

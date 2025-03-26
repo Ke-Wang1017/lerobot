@@ -8,7 +8,7 @@
 #   env.gym.obs_type=environment_state_agent_pos \
 
 seed: 1
-dataset_repo_id: KeWangRobotics/piper_rl_4_cropped_resized
+dataset_repo_id: KeWangRobotics/piper_push_cube_gamepad_1_cropped_resized
 
 training:
   # Offline training dataloader
@@ -31,7 +31,8 @@ training:
   online_steps_between_rollouts: 1000
   online_sampling_ratio: 0.5
   online_env_seed: 10000
-  online_buffer_capacity: 2048
+  online_buffer_capacity: 4096
+  offline_buffer_capacity: 4096
   online_buffer_seed_size: 0
   online_step_before_learning: 100 #5000
   do_online_rollout_async: false
@@ -63,7 +64,7 @@ policy:
     observation.images.top: [3, 128, 128]
     # observation.image: [3, 128, 128]
   output_shapes:
-    action: [2] # ["${env.action_dim}"]
+    action: ["${env.action_dim}"]
 
   # Normalization / Unnormalization
   input_normalization_modes:
@@ -72,29 +73,33 @@ policy:
     observation.state: min_max
   input_normalization_params:
     observation.images.wrist:
-      mean: [0.12514418363571167, 0.10215409845113754, 0.09941400587558746]
-      std: [0.13340850174427032, 0.09106286615133286, 0.04595724120736122]
+      mean: [0.42934370040893555, 0.43280789256095886, 0.41753706336021423]
+      std: [0.16091425716876984, 0.1525210589170456, 0.16938622295856476]
     observation.images.top:
-      mean: [0.2728222608566284, 0.2521352469921112, 0.1942160725593567]
-      std: [0.20000086724758148, 0.19260407984256744, 0.19403192400932312]
+      mean: [0.5897632241249084, 0.5815903544425964, 0.5348829627037048]
+      std: [0.15347573161125183, 0.15380138158798218, 0.1543920785188675]
     observation.state:
-      min: [0.19,  -0.06,  0.205] #,  0.]
-      max: [0.28,  0.1,  0.29] #, 0.08]
+      min: [-0.0011959957191720605, -0.10435199737548828, -0.009899002499878407, -0.036740005016326904, -0.06554000079631805, -0.01892000436782837] #,  0.]
+      max: [0.10031698644161224, 0.09663400053977966, 0.0035039964132010937, 0.04195988178253174, 0.07131993770599365, 0.020489990711212158] #, 0.08]
 
   output_normalization_modes:
     action: min_max
   output_normalization_params:
     action:
-      max: [0.28,  0.1,  0.29] #, 0.08]
-      min: [0.19,  -0.06,  0.205] #,  0.]
+      max: [0.005,
+            0.01,
+            0.002] #, 0.08]
+      min: [-0.005,
+            -0.01,
+            -0.002] #,  0.]
 
   # Architecture / modeling.
   # Neural networks.
   image_encoder_hidden_dim: 32
   # discount: 0.99
   discount: 0.97
-  temperature_init: 1.0
-  num_critics: 10 #10
+  temperature_init: 1e-2
+  num_critics: 2 #10
   camera_number: 2
   num_subsample_critics: null
   critic_lr: 3e-4
@@ -102,16 +107,22 @@ policy:
   temperature_lr: 3e-4
   # critic_target_update_weight: 0.005
   critic_target_update_weight: 0.01
-  utd_ratio: 10 # 10
+  utd_ratio: 2 # 10
 
 actor_learner_config:
-  learner_host: "100.89.106.161"
+  learner_host: "127.0.0.1"
   learner_port: 50051
   policy_parameters_push_frequency: 15
   concurrency:
     actor: "threads"
     learner: "threads"
 
+wandb:
+  enable: true
+  # Set to true to disable saving an artifact despite save_checkpoint == True
+  disable_artifact: true
+  project: lerobot
+  notes: "HIL-SERL Piper"
   # # Loss coefficients.
   # reward_coeff: 0.5
   # expectile_weight: 0.9
@@ -122,9 +133,3 @@ actor_learner_config:
   # temporal_decay_coeff: 0.5
   # # Target model.
   # target_model_momentum: 0.995
-wandb:
-  enable: true
-  # Set to true to disable saving an artifact despite save_checkpoint == True
-  disable_artifact: true
-  project: lerobot
-  notes: "HIL-SERL Piper"
