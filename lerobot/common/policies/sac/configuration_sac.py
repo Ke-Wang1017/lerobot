@@ -103,6 +103,6 @@ class SACConfig:
             "use_tanh_squash": True,
             "log_std_min": 1e-5,
             "log_std_max": 2,
-            "init_final": 0.05,
+            "init_final": 0.005,
         }
     )

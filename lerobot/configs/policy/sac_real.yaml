@@ -8,14 +8,13 @@
 #   env.gym.obs_type=environment_state_agent_pos \
 
 seed: 1
-dataset_repo_id: KeWangRobotics/piper_push_cube_gamepad_1_cropped_resized
-
+dataset_repo_id: KeWangRobotics/piper_push_cube_gamepad_2_cropped_resized
 training:
   # Offline training dataloader
   num_workers: 4
 
   # batch_size: 256
-  batch_size: 64
+  batch_size: 256
   grad_clip_norm: 10.0
   lr: 3e-4
 
@@ -23,7 +22,7 @@ training:
 
   eval_freq: 2500
   log_freq: 1
-  save_freq: 20000
+  save_freq: 1000
 
   online_steps: 1000000
   online_rollout_n_episodes: 10
@@ -31,13 +30,13 @@ training:
   online_steps_between_rollouts: 1000
   online_sampling_ratio: 0.5
   online_env_seed: 10000
-  online_buffer_capacity: 4096
-  offline_buffer_capacity: 4096
+  online_buffer_capacity: 10000
+  offline_buffer_capacity: 1024
   online_buffer_seed_size: 0
   online_step_before_learning: 100 #5000
   do_online_rollout_async: false
   policy_update_freq: 1
-
+  resume: true
   # delta_timestamps:
   #   observation.environment_state: "[i / ${fps} for i in range(${policy.horizon} + 1)]"
   #   observation.state: "[i / ${fps} for i in range(${policy.horizon} + 1)]"
@@ -46,8 +45,6 @@ training:
 
 policy:
   name: sac
-
-  pretrained_model_path:
 
   # Input / output structure.
   n_action_repeats: 1
@@ -73,25 +70,29 @@ policy:
     observation.state: min_max
   input_normalization_params:
     observation.images.wrist:
-      mean: [0.42934370040893555, 0.43280789256095886, 0.41753706336021423]
-      std: [0.16091425716876984, 0.1525210589170456, 0.16938622295856476]
+      mean: [0.46292707324028015, 0.3988291621208191,  0.3819613456726074]
+      std: [0.12041880190372467, 0.153305321931839, 0.17362308502197266]
     observation.images.top:
-      mean: [0.5897632241249084, 0.5815903544425964, 0.5348829627037048]
-      std: [0.15347573161125183, 0.15380138158798218, 0.1543920785188675]
+      mean: [0.5104569792747498, 0.46619105339050293, 0.40963974595069885]
+      std: [0.20654596388339996, 0.21190659701824188, 0.2109202891588211]
     observation.state:
-      min: [-0.0011959957191720605, -0.10435199737548828, -0.009899002499878407, -0.036740005016326904, -0.06554000079631805, -0.01892000436782837] #,  0.]
-      max: [0.10031698644161224, 0.09663400053977966, 0.0035039964132010937, 0.04195988178253174, 0.07131993770599365, 0.020489990711212158] #, 0.08]
+      min: [0.1712619960308075,
+            -0.04901900142431259,
+            -0.003799945116043091,
+            -0.053359996527433395] #,  0.]
+      max: [0.25347501039505005,
+            -0.00877000018954277,
+            0.03827005624771118,
+            0.043580010533332825] #, 0.08]
 
   output_normalization_modes:
     action: min_max
   output_normalization_params:
     action:
       max: [0.005,
-            0.01,
-            0.002] #, 0.08]
-      min: [-0.005,
-            -0.01,
-            -0.002] #,  0.]
+            0.008] #, 0.08]
+      min: [0.0,
+            -0.008] 
 
   # Architecture / modeling.
   # Neural networks.

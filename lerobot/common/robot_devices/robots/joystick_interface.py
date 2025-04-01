@@ -76,7 +76,7 @@ class JoystickInterface:
         self.manager = multiprocessing.Manager()
         self.latest_data = self.manager.dict()
         self.latest_data["action"] = [0.0] * 6
-        self.latest_data["buttons"] = [False, False, False, False]
+        self.latest_data["buttons"] = [False, False, False, False, False]
 
         # Start a process to continuously read Joystick state
         self._process = multiprocessing.Process(target=self._read_joystick)
@@ -182,8 +182,8 @@ class JoystickIntervention():
 
         expert_a, buttons = self.expert.get_action()
         self.left, self.right, self.home, self.intervention_start, self.success = tuple(buttons)
-        import logging
-        logging.info(f"success on joystick: {self.success}")
+        # import logging
+        # logging.info(f"success on joystick: {self.success}")
 
         for i, a in enumerate(expert_a):
             if abs(a) <= deadzone:

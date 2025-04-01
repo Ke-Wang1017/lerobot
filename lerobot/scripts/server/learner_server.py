@@ -77,9 +77,10 @@ def handle_resume_logic(cfg: DictConfig, out_dir: str) -> DictConfig:
                 "Use `resume=true` to resume training."
             )
         return cfg
-
+    # breakpoint()
     # if resume == True
     checkpoint_dir = Logger.get_last_checkpoint_dir(out_dir)
+    # checkpoint_dir = cfg.pretrained_model_path
     if not checkpoint_dir.exists():
         raise RuntimeError(
             f"No model checkpoint found in {checkpoint_dir} for resume=True"

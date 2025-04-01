@@ -68,10 +68,11 @@ class HILSerlRobotEnv(gym.Env):
 
         self.delta = delta
         self.use_delta_action_space = use_delta_action_space
+        self.prev_action = np.zeros(2)
         # self.current_joint_positions = self.robot.leader_arms["main"].read(
         #     "Present_Position"
         # )
-        self.current_joint_positions = self.robot.get_state()["state"][:3]
+        self.current_joint_positions = self.robot.get_state()["state"][:2]
         # Retrieve the size of the joint position interval bound.
         self.relative_bounds_size = (
             torch.tensor(self.robot.config.joint_position_relative_bounds["max"])
@@ -121,12 +122,12 @@ class HILSerlRobotEnv(gym.Env):
         self.observation_space = gym.spaces.Dict(observation_spaces)
 
         # Define the action space for joint positions along with setting an intervention flag.
-        action_dim = 3 # len(self.robot.follower_arms["main"].read("Present_Position"))
+        self.action_dim = 2 # len(self.robot.follower_arms["main"].read("Present_Position"))
         if self.use_delta_action_space:
             action_space_robot = gym.spaces.Box(
                 low=-self.relative_bounds_size.cpu().numpy(),
                 high=self.relative_bounds_size.cpu().numpy(),
-                shape=(action_dim,),
+                shape=(self.action_dim,),
                 dtype=np.float32,
             )
         else:
@@ -137,7 +138,7 @@ class HILSerlRobotEnv(gym.Env):
                 high=self.robot.config.joint_position_relative_bounds["max"]
                 .cpu()
                 .numpy(),
-                shape=(action_dim,),
+                shape=(self.action_dim,),
                 dtype=np.float32,
             )
 
@@ -207,7 +208,7 @@ class HILSerlRobotEnv(gym.Env):
         """
         policy_action, intervention_bool = action
         teleop_action = None
-        self.current_joint_positions = self.robot.get_state()["state"][:3]
+        self.current_joint_positions = self.robot.get_state()["state"][:2]
         if isinstance(policy_action, torch.Tensor):
             policy_action = policy_action.cpu().numpy() 
             policy_action = np.clip(
@@ -224,8 +225,15 @@ class HILSerlRobotEnv(gym.Env):
                 target_joint_positions, self.robot.config.joint_position_relative_bounds["min"], self.robot.config.joint_position_relative_bounds["max"]
             )
             action_full = self.robot.teleop.action()
+            # target_action = 0.5*self.prev_action + 0.5*target_joint_positions
+            # self.prev_action = target_action
             # add gripper action to the target joint positions
-            self.robot.send_action(torch.from_numpy(np.concatenate([target_joint_positions, [action_full[-1]]])))
+            for i in range(2):
+                target_joint_positions = self.current_joint_positions + policy_action*(1+i)/2
+                target_joint_positions = np.clip(target_joint_positions, self.robot.config.joint_position_relative_bounds["min"], self.robot.config.joint_position_relative_bounds["max"]
+            )
+                self.robot.send_action(torch.from_numpy(np.concatenate([target_joint_positions, [action_full[-1]]])))
+                busy_wait(0.03)
             observation = self.robot.capture_observation()
         else:
             observation, teleop_action = self.robot.teleop_step(record_data=True)
@@ -519,7 +527,20 @@ class ImageCropResizeWrapper(gym.Wrapper):
         obs, reward, terminated, truncated, info = self.env.step(action)
         for k in self.crop_params_dict:
             device = obs[k].device
+            if obs[k].dim() >= 3:
+                # Reshape to combine height and width dimensions for easier calculation
+                batch_size = obs[k].size(0)
+                channels = obs[k].size(1)
+                flattened_spatial_dims = obs[k].view(batch_size, channels, -1)
 
+                # Calculate standard deviation across spatial dimensions (H, W)
+                std_per_channel = torch.std(flattened_spatial_dims, dim=2)
+
+                # If any channel has std=0, all pixels in that channel have the same value
+                if (std_per_channel <= 0.02).any():
+                    logging.warning(
+                        f"Potential hardware issue detected: All pixels have the same value in observation {k}"
+                    )
             # Check for NaNs before processing
             if torch.isnan(obs[k]).any():
                 logging.error(
@@ -722,19 +743,18 @@ class JoystickInterfaceWrapper(gym.Wrapper):
         """Check if intervention button is pressed and toggle intervention state."""
         # Check if the intervention button is pressed (X button on Xbox controller)
         is_intervention, is_success = self.robot.get_intervention_start()
-        # logging.info(f"Intervention: {is_intervention}")
+
+        # Extract policy_action if needed
+        if isinstance(self.env.action_space, gym.spaces.Tuple):
+            policy_action = action[0]
+
+        # Execute the step in the underlying environment
+        obs, reward, terminated, truncated, info = self.env.step(
+            (policy_action, is_intervention)
+        )
         if is_success:
             reward = 1
             terminated = True
-        else:
-            # Extract policy_action if needed
-            if isinstance(self.env.action_space, gym.spaces.Tuple):
-                policy_action = action[0]
-
-            # Execute the step in the underlying environment
-            obs, reward, terminated, truncated, info = self.env.step(
-                (policy_action, is_intervention)
-            )
 
         return obs, reward, terminated, truncated, info
 
@@ -838,7 +858,7 @@ def make_robot_env(
     # )
     # Create the appropriate interface wrapper
     env = JoystickInterfaceWrapper(env=env)
-    env = KeyboardInterfaceWrapper(env=env)
+    # env = KeyboardInterfaceWrapper(env=env)
     env = TimeLimitWrapper(
         env=env, control_time_s=cfg.env.wrapper.control_time_s, fps=cfg.fps
     )
@@ -892,8 +912,8 @@ def replay_episode(env, repo_id, root=None, episode=0):
     for idx in range(dataset.num_frames):
         start_episode_t = time.perf_counter()
 
-        action = actions[idx]["action"][:4]
-        # print(action)
+        action = actions[idx]["action"][:2]
+        # breakpoint()
         env.step((action / env.unwrapped.delta, False))
 
         dt_s = time.perf_counter() - start_episode_t
@@ -990,7 +1010,7 @@ if __name__ == "__main__":
         )
     else:
         reward_classifier = None
-    user_relative_joint_positions = True
+    # user_relative_joint_positions = True
 
     cfg = init_hydra_config(args.env_path, args.env_overrides)
     env = make_robot_env(

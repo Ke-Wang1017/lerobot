@@ -113,7 +113,7 @@ class PiperRobot(ManipulatorRobot):
         self.piper.GripperCtrl(0,1000,0x01, 0)
         self.state_scaling_factor = 1e6 
         # self.default_pos = [0.200337, 0.020786, 0.289284, 0.179831, 0.010918, 0.173467, 0.0]
-        self.default_pos = [0.191642, -0.028, 0.1648, 0.179831, 0.010918, 0.173467, 0.0]
+        self.default_pos = [0.171642, -0.028, 0.165, 0.179831, 0.010918, 0.173467, 0.0]
         self.joint_position_relative_bounds = self.config.joint_position_relative_bounds
         self.previous_ee_position = np.array([0.0, 0.0, 0.0])
         self.current_state = np.array([0.0, 0.0, 0.0, 0.0])
@@ -135,13 +135,13 @@ class PiperRobot(ManipulatorRobot):
         return {
             "action": {
                 "dtype": "float64",
-                "shape": (3,),  # Change shape
-                "names": ["joint1", "joint2", "joint3"],  # New names
+                "shape": (2,),  # Change shape
+                "names": ["joint1", "joint2"],  # New names
             },
             "observation.state": {
                 "dtype": "float64",
-                "shape": (6,),
-                "names": ["joint1", "joint2", "joint3", "velocity1", "velocity2", "velocity3"],
+                "shape": (4,),
+                "names": ["joint1", "joint2", "velocity1", "velocity2"],
             },
         }
     # Signal handler for graceful shutdown
@@ -271,30 +271,16 @@ class PiperRobot(ManipulatorRobot):
         state = self.get_state()
         state = state["state"]
         # state[3:6] = self.euler_filter.rectify(state[3:6])
-        # # Store the data
-        # timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
-        # self.data_rows.append([
-        #     timestamp,
-        #     state[0],
-        #     state[1],
-        #     state[2],
-        #     state[3],
-        #     state[4],
-        #     state[5],
-        #     state[6],
-        # ])
         # get relative action from joystick
         action = self.teleop.action()
         # print(action)
         # Convert action to numpy array first
         action = np.array(action, dtype=np.float32)
-        action_record = deepcopy(action[:3])
+        action_record = deepcopy(action[:2])
         # action_record = np.concatenate([action[:3], [action[-1]]])
         
-        # action[:3] += state[:3]
-
         for i in range(self.action_repeat):
-            action[:3] = state[:3] + action_record*(i+1)/self.action_repeat
+            action[:2] = state[:2] + action_record*(i+1)/self.action_repeat
             self.send_action(action)
             busy_wait(0.03)
  
@@ -307,7 +293,7 @@ class PiperRobot(ManipulatorRobot):
             return
         # action_record[3:6] -= state[3:6] # just get delta orientation
         # it has to be done after send_action
-        state[:3] -= self.default_pos[:3]
+        # state[:2] -= self.default_pos[:2]
         state = torch.as_tensor(state).to(torch.float32)
         action_record = torch.as_tensor(action_record).to(torch.float32)
         # print(action_record)
@@ -333,17 +319,17 @@ class PiperRobot(ManipulatorRobot):
     def get_state(self) -> dict:
         end_effector_pose = self.piper.GetArmEndPoseMsgs()
         gripper_pose = self.piper.GetArmGripperMsgs()
-        self.previous_ee_position = self.current_state[:3]
+        self.previous_ee_position = self.current_state[:2]
         
         # Convert to float32 numpy array
         self.current_state = np.array([
             end_effector_pose.end_pose.X_axis,
             end_effector_pose.end_pose.Y_axis,
-            end_effector_pose.end_pose.Z_axis,
+            # end_effector_pose.end_pose.Z_axis,
             # gripper_pose.gripper_state.grippers_angle
         ], dtype=np.float32) / self.state_scaling_factor
         # add velocity to state
-        velocity = (self.current_state[:3] - self.previous_ee_position) * self.fps
+        velocity = (self.current_state[:2] - self.previous_ee_position) * self.fps
         state = np.concatenate([self.current_state, velocity])
         
         # print(f"state: {state}")
@@ -368,8 +354,9 @@ class PiperRobot(ManipulatorRobot):
         # TODO(aliberts): return ndarrays instead of torch.Tensors
         before_read_t = time.perf_counter()
         state = self.get_state()
+        # state = state["state"]
         # state["state"][3:6] = self.euler_filter.rectify(state["state"][3:6])
-        state["state"][:3] -= self.default_pos[:3]
+        # state["state"][:2] -= self.default_pos[:2]
         self.logs["read_pos_dt_s"] = time.perf_counter() - before_read_t
 
         if self.state_keys is None:
@@ -404,7 +391,7 @@ class PiperRobot(ManipulatorRobot):
         # action[5] = max(-np.pi/2, min(np.pi/2, action[5]))
         X = round(action[0]*self.state_scaling_factor)
         Y = round(action[1]*self.state_scaling_factor)
-        Z = round(action[2]*self.state_scaling_factor)
+        Z = round(self.default_pos[2]*self.state_scaling_factor)
         RX = round(self.default_pos[3]*self.state_scaling_factor)
         RY = round(self.default_pos[4]*self.state_scaling_factor)
         RZ = round(self.default_pos[5]*self.state_scaling_factor)
