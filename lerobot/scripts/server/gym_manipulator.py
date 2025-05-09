@@ -1794,13 +1794,14 @@ def make_robot_env(cfg) -> gym.vector.VectorEnv:
         A vectorized gym environment with all necessary wrappers applied.
     """
     if cfg.type == "hil":
-        import gymnasium as gym
+        import gym_hil
 
         # TODO (azouitine)
         env = gym.make(
             f"gym_hil/{cfg.task}",
             image_obs=True,
             render_mode="human",
+            time_limit=cfg.episode_length,
             step_size=cfg.wrapper.ee_action_space_params.x_step_size,
             use_gripper=cfg.wrapper.use_gripper,
             gripper_penalty=cfg.wrapper.gripper_penalty,
@@ -2063,6 +2064,9 @@ def record_dataset(env, policy, cfg, success_collection_steps=15):
 
             # Check if we should end the episode
             if (terminated or truncated) and not success_detected:
+                logging.info("Episode ended without success")
+                logging.info(f"terminated: {terminated}")
+                logging.info(f"truncated: {truncated}")
                 # Regular termination without success
                 break
             elif success_detected and success_steps_collected >= success_collection_steps:
@@ -2076,7 +2080,7 @@ def record_dataset(env, policy, cfg, success_collection_steps=15):
             logging.info(f"Re-recording episode {episode_index}")
             continue
 
-        dataset.save_episode(cfg.task)
+        dataset.save_episode()
         episode_index += 1
 
     # Finalize dataset

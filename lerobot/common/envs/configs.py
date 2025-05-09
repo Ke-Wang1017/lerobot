@@ -236,7 +236,7 @@ class HILEnvConfig(EnvConfig):
 
     type: str = "hil"
     name: str = "PandaPickCube"
-    task: str = "PandaPickCubeKeyboard-v0"
+    task: str = "PandaPickCubeGamepad-v0"
     use_viewer: bool = True
     gripper_penalty: float = 0.0
     use_gamepad: bool = True

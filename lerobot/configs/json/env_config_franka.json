@@ -1,0 +1,105 @@
+{
+    "type": "hil",
+    "robot": {
+        "type": "so100",
+        "leader_arms": {},
+        "follower_arms": {},
+        "cameras": {}
+    },
+    "wrapper": {
+        "gripper_penalty": -0.02,
+        "display_cameras": true,
+        "add_joint_velocity_to_observation": true,
+        "add_ee_pose_to_observation": true,
+        "crop_params_dict": {
+            "observation.images.front": [
+                0,
+                0,
+                128,
+                128
+            ],
+            "observation.images.side": [
+                0,
+                0,
+                128,
+                128
+            ]
+        },
+        "resize_size": [
+            128,
+            128
+        ],
+        "control_time_s": 60.0,
+        "use_gripper": true,
+        "fixed_reset_joint_positions": [
+            0.0,
+            0.195,
+            0.0,
+            -2.43,
+            0.0,
+            2.62,
+            0.785
+        ],
+        "reset_time_s": 2.0,
+        "ee_action_space_params": {
+            "x_step_size": 0.1,
+            "y_step_size": 0.1,
+            "z_step_size": 0.1,
+            "bounds": {
+                "max": [
+                    0.6,
+                    0.3,
+                    0.5
+                ],
+                "min": [
+                    0.2,
+                    -0.3,
+                    0.0
+                ]
+            }
+        }
+    },
+    "name": "franka_sim",
+    "mode": "record",
+    "repo_id": "KeWangRobotics/panda_pick_cube_demos_simple_side_cam_full_discrete",
+    "dataset_root": null,
+    "task": "PandaPickCubeGamepad-v0",
+    "num_episodes": 10,
+    "episode": 0,
+    "episode_length": 50,
+    "pretrained_policy_name_or_path": null,
+    "device": "cpu",
+    "push_to_hub": true,
+    "fps": 10,
+    "features": {
+        "observation.images.front": {
+            "type": "VISUAL",
+            "shape": [
+                3,
+                128,
+                128
+            ]
+        },
+        "observation.images.side": {
+            "type": "VISUAL",
+            "shape": [
+                3,
+                128,
+                128
+            ]
+        },
+        "observation.state": {
+            "type": "STATE",
+            "shape": [
+                19
+            ]
+        },
+        "action": {
+            "type": "ACTION",
+            "shape": [
+                4
+            ]
+        }
+    },
+    "features_map": {}
+}
