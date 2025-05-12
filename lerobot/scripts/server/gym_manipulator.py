@@ -1801,11 +1801,12 @@ def make_robot_env(cfg) -> gym.vector.VectorEnv:
             f"gym_hil/{cfg.task}",
             image_obs=True,
             render_mode="human",
-            time_limit=cfg.episode_length,
             step_size=cfg.wrapper.ee_action_space_params.x_step_size,
             use_gripper=cfg.wrapper.use_gripper,
             gripper_penalty=cfg.wrapper.gripper_penalty,
+            max_episode_steps=cfg.wrapper.control_time_s * cfg.fps,
         )
+        # breakpoint()
         env = GymHilObservationProcessorWrapper(env=env)
         env = GymHilDeviceWrapper(env=env, device=cfg.device)
         env = BatchCompatibleWrapper(env=env)

@@ -264,6 +264,9 @@ class HILEnvConfig(EnvConfig):
     )
     ################# args from hilserlrobotenv
     reward_classifier_pretrained_path: Optional[str] = None
+    number_of_steps_after_success: int = (
+        0  # For the reward classifier, to record more positive examples after a success
+    )
     robot: Optional[RobotConfig] = None
     wrapper: Optional[EnvWrapperConfig] = None
     mode: str = None  # Either "record", "replay", None

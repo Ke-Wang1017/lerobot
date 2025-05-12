@@ -42,9 +42,9 @@
         ],
         "reset_time_s": 2.0,
         "ee_action_space_params": {
-            "x_step_size": 0.1,
-            "y_step_size": 0.1,
-            "z_step_size": 0.1,
+            "x_step_size": 0.015,
+            "y_step_size": 0.015,
+            "z_step_size": 0.015,
             "bounds": {
                 "max": [
                     0.6,
@@ -65,8 +65,8 @@
     "dataset_root": null,
     "task": "PandaPickCubeGamepad-v0",
     "num_episodes": 10,
+    "number_of_steps_after_success": 10,
     "episode": 0,
-    "episode_length": 50,
     "pretrained_policy_name_or_path": null,
     "device": "cpu",
     "push_to_hub": true,

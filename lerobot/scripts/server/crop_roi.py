@@ -1,30 +1,15 @@
-#!/usr/bin/env python
-
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-import argparse
+import argparse  # noqa: I001
 import json
 from copy import deepcopy
-from pathlib import Path
 from typing import Dict, Tuple
-
+from pathlib import Path
 import cv2
+
 # Make sure that the UI gets initialized before PyAV (av) gets imported by torchvision
 # This solves the hanging issue with cv2.imshow on Ubuntu
 cv2.namedWindow("Select ROI")
 cv2.destroyAllWindows()
+
 # import torch.nn.functional as F  # noqa: N812
 import torchvision.transforms.functional as F  # type: ignore  # noqa: N812
 from tqdm import tqdm  # type: ignore
@@ -53,23 +38,23 @@ def select_rect_roi(img):
 
     roi = None  # Will store the final ROI as (top, left, height, width)
     drawing = False
-    index_x, index_y = -1, -1  # Initial click coordinates
+    ix, iy = -1, -1  # Initial click coordinates
 
     def mouse_callback(event, x, y, flags, param):
-        nonlocal index_x, index_y, drawing, roi, working_img
+        nonlocal ix, iy, drawing, roi, working_img
 
         if event == cv2.EVENT_LBUTTONDOWN:
             # Start drawing: record starting coordinates
             drawing = True
-            index_x, index_y = x, y
+            ix, iy = x, y
 
         elif event == cv2.EVENT_MOUSEMOVE:
             if drawing:
                 # Compute the top-left and bottom-right corners regardless of drag direction
-                top = min(index_y, y)
-                left = min(index_x, x)
-                bottom = max(index_y, y)
-                right = max(index_x, x)
+                top = min(iy, y)
+                left = min(ix, x)
+                bottom = max(iy, y)
+                right = max(ix, x)
                 # Show a temporary image with the current rectangle drawn
                 temp = working_img.copy()
                 cv2.rectangle(temp, (left, top), (right, bottom), (0, 255, 0), 2)
@@ -78,10 +63,10 @@ def select_rect_roi(img):
         elif event == cv2.EVENT_LBUTTONUP:
             # Finish drawing
             drawing = False
-            top = min(index_y, y)
-            left = min(index_x, x)
-            bottom = max(index_y, y)
-            right = max(index_x, x)
+            top = min(iy, y)
+            left = min(ix, x)
+            bottom = max(iy, y)
+            right = max(ix, x)
             height = bottom - top
             width = right - left
             roi = (top, left, height, width)  # (top, left, height, width)
@@ -170,7 +155,6 @@ def convert_lerobot_dataset_to_cropper_lerobot_dataset(
     new_repo_id: str,
     new_dataset_root: str,
     resize_size: Tuple[int, int] = (128, 128),
-    push_to_hub: bool = False,
 ) -> LeRobotDataset:
     """
     Converts an existing LeRobotDataset by iterating over its episodes and frames,
@@ -204,39 +188,43 @@ def convert_lerobot_dataset_to_cropper_lerobot_dataset(
     # (Here we simply set the shape to be the final resize_size.)
     for key in crop_params_dict:
         if key in new_dataset.meta.info["features"]:
-            new_dataset.meta.info["features"][key]["shape"] = [3] + list(resize_size)
+            new_dataset.meta.info["features"][key]["shape"] = list(resize_size)
 
-    prev_episode_index = 0
-    for frame_idx in tqdm(range(len(original_dataset))):
-        frame = original_dataset[frame_idx]
+    # 2. Process each episode in the original dataset.
+    episodes_info = original_dataset.meta.episodes
+    # (Sort episodes by episode_index for consistency.)
 
-        # Create a copy of the frame to add to the new dataset
-        new_frame = {}
-        for key, value in frame.items():
-            if key in ("task_index", "timestamp", "episode_index", "frame_index", "index"):
-                continue
-            if key in ("next.done", "next.reward", "complementary_info.discrete_penalty"):
-                # if not isinstance(value, str) and len(value.shape) == 0:
-                value = value.unsqueeze(0)
+    episodes_info = sorted(episodes_info, key=lambda x: x["episode_index"])
+    # Use the first task from the episode metadata (or "unknown" if not provided)
+    task = episodes_info[0]["tasks"][0] if episodes_info[0].get("tasks") else "unknown"
 
-            if key in crop_params_dict:
-                top, left, height, width = crop_params_dict[key]
+    last_episode_index = 0
+    for sample in tqdm(original_dataset):
+        episode_index = sample.pop("episode_index")
+        if episode_index != last_episode_index:
+            new_dataset.save_episode(task, encode_videos=True)
+            last_episode_index = episode_index
+        sample.pop("frame_index")
+        # Make a shallow copy of the sample (the values—e.g. torch tensors—are assumed immutable)
+        new_sample = sample.copy()
+        # Loop over each observation key that should be cropped/resized.
+        for key, params in crop_params_dict.items():
+            if key in new_sample:
+                top, left, height, width = params
                 # Apply crop then resize.
-                cropped = F.crop(value, top, left, height, width)
-                value = F.resize(cropped, resize_size)
-                value = value.clamp(0, 1)
+                cropped = F.crop(new_sample[key], top, left, height, width)
+                resized = F.resize(cropped, resize_size)
+                new_sample[key] = resized
+        # Add the transformed frame to the new dataset.
+        new_dataset.add_frame(new_sample)
 
-            new_frame[key] = value
+    # save last episode
+    new_dataset.save_episode(task, encode_videos=True)
 
-        new_dataset.add_frame(new_frame)
+    # Optionally, consolidate the new dataset to compute statistics and update video info.
+    new_dataset.consolidate(run_compute_stats=True, keep_image_files=True)
 
-        if frame["episode_index"].item() != prev_episode_index:
-            # Save the episode
-            new_dataset.save_episode()
-            prev_episode_index = frame["episode_index"].item()
-
-    if push_to_hub:
-        new_dataset.push_to_hub()
+    new_dataset.push_to_hub(tags=None)
 
     return new_dataset
 
@@ -261,15 +249,11 @@ if __name__ == "__main__":
         default=None,
         help="The path to the JSON file containing the ROIs.",
     )
-    parser.add_argument(
-        "--push-to-hub",
-        type=bool,
-        default=False,
-        help="Whether to push the new dataset to the hub.",
-    )
     args = parser.parse_args()
 
-    dataset = LeRobotDataset(repo_id=args.repo_id, root=args.root)
+    local_files_only = args.root is not None
+    # local_files_only = False
+    dataset = LeRobotDataset(repo_id=args.repo_id, root=args.root)#, local_files_only=local_files_only)
 
     images = get_image_from_lerobot_dataset(dataset)
     images = {k: v.cpu().permute(1, 2, 0).numpy() for k, v in images.items()}
@@ -289,13 +273,12 @@ if __name__ == "__main__":
     new_repo_id = args.repo_id + "_cropped_resized"
     new_dataset_root = Path(str(dataset.root) + "_cropped_resized")
 
-    cropped_resized_dataset = convert_lerobot_dataset_to_cropper_lerobot_dataset(
+    croped_resized_dataset = convert_lerobot_dataset_to_cropper_lerobot_dataset(
         original_dataset=dataset,
         crop_params_dict=rois,
         new_repo_id=new_repo_id,
         new_dataset_root=new_dataset_root,
         resize_size=(128, 128),
-        push_to_hub=args.push_to_hub,
     )
 
     meta_dir = new_dataset_root / "meta"
