@@ -61,7 +61,7 @@
     },
     "name": "franka_sim",
     "mode": "record",
-    "repo_id": "KeWangRobotics/panda_pick_cube_demos_simple_side_cam_full_discrete",
+    "repo_id": "KeWangRobotics/panda_pick_cube_demos_sim_discrete",
     "dataset_root": null,
     "task": "PandaPickCubeGamepad-v0",
     "num_episodes": 10,
