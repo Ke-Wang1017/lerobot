@@ -47,7 +47,9 @@ def preprocess_observation(observations: dict[str, np.ndarray]) -> dict[str, Ten
             # TODO(aliberts, rcadene): use transforms.ToTensor()?
             img = torch.from_numpy(img)
 
-            if img.dim() == 3:
+            # When preprocessing observations in a non-vectorized environment, we need to add a batch dimension.
+            # This is the case for human-in-the-loop RL where there is only one environment.
+            if img.ndim == 3:
                 img = img.unsqueeze(0)
             # sanity check that images are channel last
             _, h, w, c = img.shape
@@ -77,35 +79,6 @@ def preprocess_observation(observations: dict[str, np.ndarray]) -> dict[str, Ten
     return_observations["observation.state"] = agent_pos
 
     return return_observations
-
-
-class ObservationProcessorWrapper(gym.vector.VectorEnvWrapper):
-    def __init__(self, env: gym.vector.VectorEnv):
-        super().__init__(env)
-
-    def _observations(self, observations: dict[str, Any]) -> dict[str, Any]:
-        return preprocess_observation(observations)
-
-    def reset(
-        self,
-        *,
-        seed: int | list[int] | None = None,
-        options: dict[str, Any] | None = None,
-    ):
-        """Modifies the observation returned from the environment ``reset`` using the :meth:`observation`."""
-        observations, infos = self.env.reset(seed=seed, options=options)
-        return self._observations(observations), infos
-
-    def step(self, actions):
-        """Modifies the observation returned from the environment ``step`` using the :meth:`observation`."""
-        observations, rewards, terminations, truncations, infos = self.env.step(actions)
-        return (
-            self._observations(observations),
-            rewards,
-            terminations,
-            truncations,
-            infos,
-        )
 
 
 def env_to_policy_features(env_cfg: EnvConfig) -> dict[str, PolicyFeature]:
