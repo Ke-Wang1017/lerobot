@@ -4,11 +4,11 @@
     "resume": false,
     "seed": 1000,
     "num_workers": 4,
-    "batch_size": 32,
+    "batch_size": 256,
     "steps": 100000,
     "log_freq": 1,
     "save_checkpoint": true,
-    "save_freq": 2000000,
+    "save_freq": 3000,
     "wandb": {
         "enable": true,
         "project": "franka_sim",
@@ -130,18 +130,17 @@
             },
             "action": {
                 "min": [
-                    -0.02,
-                    -0.02,
-                    -0.02
+                    -0.015,
+                    -0.015,
+                    -0.015
                 ],
                 "max": [
-                    0.02,
-                    0.02,
-                    0.02
+                    0.015,
+                    0.015,
+                    0.015
                 ]
             }
         },
-        "camera_number": 2,
         "storage_device": "cpu",
         "vision_encoder_name": "helper2424/resnet10",
         "freeze_vision_encoder": true,
@@ -190,7 +189,7 @@
             "init_final": 0.05
         },
         "actor_learner_config": {
-            "learner_host": "100.84.195.148",
+            "learner_host": "0.0.0.0",
             "learner_port": 50051,
             "policy_parameters_push_frequency": 50
         },
@@ -213,14 +212,14 @@
             "add_joint_velocity_to_observation": true,
             "add_ee_pose_to_observation": true,
             "crop_params_dict": {
-                "observation.images.front": [76, 1, 48, 124],
-                "observation.images.wrist": [0, 2, 124, 125]
+                "observation.images.front": [0, 0, 128, 128],
+                "observation.images.wrist": [0, 0, 128, 128]
             },
             "resize_size": [
                 128,
                 128
             ],
-            "control_time_s": 15.0,
+            "control_time_s": 10.0,
             "use_gripper": true,
             "fixed_reset_joint_positions": [
                 0.0,
@@ -256,7 +255,7 @@
         "repo_id": "KeWangRobotics/panda_pick_cube_demos_sim_discrete",
         "dataset_root": null,
         "task": "PandaPickCubeGamepad-v0",
-        "num_episodes": 10,
+        "num_episodes": 30,
         "episode": 0,
         "pretrained_policy_name_or_path": null,
         "device": "cuda",

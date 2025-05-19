@@ -1814,7 +1814,7 @@ def make_robot_env(cfg) -> gym.vector.VectorEnv:
             f"gym_hil/{cfg.task}",
             image_obs=True,
             render_mode="human",
-            viewer_type="dual",
+            viewer_type="single",
             step_size=cfg.wrapper.ee_action_space_params.x_step_size,
             use_gripper=cfg.wrapper.use_gripper,
             gripper_penalty=cfg.wrapper.gripper_penalty,

@@ -29,7 +29,7 @@
             128,
             128
         ],
-        "control_time_s": 60.0,
+        "control_time_s": 20.0,
         "use_gripper": true,
         "fixed_reset_joint_positions": [
             0.0,
@@ -61,10 +61,10 @@
     },
     "name": "franka_sim",
     "mode": "record",
-    "repo_id": "KeWangRobotics/panda_pick_cube_demos_sim_discrete",
+    "repo_id": "KeWangRobotics/panda_pick_cube_demos_sim_discrete_new",
     "dataset_root": null,
     "task": "PandaPickCubeGamepad-v0",
-    "num_episodes": 10,
+    "num_episodes": 30,
     "number_of_steps_after_success": 10,
     "episode": 0,
     "pretrained_policy_name_or_path": null,
