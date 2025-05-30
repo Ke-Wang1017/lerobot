@@ -15,7 +15,7 @@
         "disable_artifact": true
     },
     "dataset": {
-        "repo_id": "KeWangRobotics/panda_pick_cube_demos_sim_discrete",
+        "repo_id": "KeWangRobotics/panda_pick_cube_demos_sim_discrete_debugging",
         "use_imagenet_stats": false
     },
     "policy": {
@@ -47,7 +47,7 @@
             "observation.state": {
                 "type": "STATE",
                 "shape": [
-                    18
+                    19
                 ]
             }
         },
@@ -88,44 +88,46 @@
             },
             "observation.state": {
                 "min": [
-                    -0.6897139549255371,
-                    -1.1421763896942139,
-                    -0.5745007991790771,
-                    -2.97829008102417,
-                    -0.2710767090320587,
-                    1.3246592283248901,
-                    -0.04057434946298599,
-                    -0.21261805295944214,
-                    -0.4548068344593048,
-                    -0.6540042757987976,
-                    -0.3644964098930359,
-                    -1.1057522296905518,
-                    -0.40768879652023315,
-                    -0.2220114767551422,
+                    -0.18890867,
+                    -0.13319267,
+                    -0.15566483,
+                    -3.04198435,
+                    -0.05300621,
+                    2.52864378,
+                    0.426834,
                     0.0,
-                    0.19176171720027924,
-                    -0.3013063669204712,
-                    0.00362197193317115
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    0.33708815,
+                    -0.19474622,
+                    0.01758184
                 ],
                 "max": [
-                    0.5107022523880005,
-                    0.5516204237937927,
-                    0.5620884299278259,
-                    -1.3330878019332886,
-                    0.32758936285972595,
-                    3.119610548019409,
-                    1.8364211320877075,
-                    0.25358933210372925,
-                    0.36316126585006714,
-                    0.14765967428684235,
-                    0.49947625398635864,
-                    0.144814133644104,
-                    0.2820609211921692,
-                    0.7382049560546875,
-                    255.0,
-                    0.6012658476829529,
-                    0.3005995750427246,
-                    0.5004003643989563
+                    0.1956124,
+                    0.5096723,
+                    0.05482981,
+                    -2.01792539,
+                    0.04425749,
+                    2.90565838,
+                    1.07170398,
+                    1.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    0.60002666,
+                    0.21726941,
+                    0.18940686
                 ]
             },
             "action": {
@@ -189,7 +191,7 @@
             "init_final": 0.05
         },
         "actor_learner_config": {
-            "learner_host": "0.0.0.0",
+            "learner_host": "100.84.219.95",
             "learner_port": 50051,
             "policy_parameters_push_frequency": 50
         },
@@ -219,7 +221,7 @@
                 128,
                 128
             ],
-            "control_time_s": 10.0,
+            "control_time_s": 15.0,
             "use_gripper": true,
             "fixed_reset_joint_positions": [
                 0.0,
@@ -232,9 +234,9 @@
             ],
             "reset_time_s": 2.0,
             "ee_action_space_params": {
-                "x_step_size": 0.015,
-                "y_step_size": 0.015,
-                "z_step_size": 0.015,
+                "x_step_size": 0.5,
+                "y_step_size": 0.5,
+                "z_step_size": 0.5,
                 "bounds": {
                     "max": [
                         0.6,
@@ -252,10 +254,10 @@
         },
         "name": "franka_sim",
         "mode": null,
-        "repo_id": "KeWangRobotics/panda_pick_cube_demos_sim_discrete",
+        "repo_id": "KeWangRobotics/panda_pick_cube_demos_sim_discrete_debugging",
         "dataset_root": null,
         "task": "PandaPickCubeGamepad-v0",
-        "num_episodes": 30,
+        "num_episodes": 20,
         "episode": 0,
         "pretrained_policy_name_or_path": null,
         "device": "cuda",
@@ -281,7 +283,7 @@
             "observation.state": {
                 "type": "STATE",
                 "shape": [
-                    18
+                    19
                 ]
             },
             "action": {

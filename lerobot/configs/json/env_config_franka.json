@@ -18,7 +18,7 @@
                 128,
                 128
             ],
-            "observation.images.side": [
+            "observation.images.wrist": [
                 0,
                 0,
                 128,
@@ -42,9 +42,9 @@
         ],
         "reset_time_s": 2.0,
         "ee_action_space_params": {
-            "x_step_size": 0.015,
-            "y_step_size": 0.015,
-            "z_step_size": 0.015,
+            "x_step_size": 0.5,
+            "y_step_size": 0.5,
+            "z_step_size": 0.5,
             "bounds": {
                 "max": [
                     0.6,
@@ -61,10 +61,10 @@
     },
     "name": "franka_sim",
     "mode": "record",
-    "repo_id": "KeWangRobotics/panda_pick_cube_demos_sim_discrete_new",
+    "repo_id": "KeWangRobotics/panda_pick_cube_demos_sim_discrete_debugging",
     "dataset_root": null,
     "task": "PandaPickCubeGamepad-v0",
-    "num_episodes": 30,
+    "num_episodes": 20,
     "number_of_steps_after_success": 10,
     "episode": 0,
     "pretrained_policy_name_or_path": null,
@@ -80,7 +80,7 @@
                 128
             ]
         },
-        "observation.images.side": {
+        "observation.images.wrist": {
             "type": "VISUAL",
             "shape": [
                 3,
