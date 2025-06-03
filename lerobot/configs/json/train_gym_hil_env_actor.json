@@ -15,7 +15,7 @@
         "disable_artifact": true
     },
     "dataset": {
-        "repo_id": "KeWangRobotics/panda_pick_cube_demos_sim_discrete_debugging",
+        "repo_id": "KeWangRobotics/panda_pick_debug_1",
         "use_imagenet_stats": false
     },
     "policy": {
@@ -191,7 +191,7 @@
             "init_final": 0.05
         },
         "actor_learner_config": {
-            "learner_host": "100.84.219.95",
+            "learner_host": "100.86.177.241",
             "learner_port": 50051,
             "policy_parameters_push_frequency": 50
         },
@@ -254,10 +254,10 @@
         },
         "name": "franka_sim",
         "mode": null,
-        "repo_id": "KeWangRobotics/panda_pick_cube_demos_sim_discrete_debugging",
+        "repo_id": "KeWangRobotics/panda_pick_debug_1",
         "dataset_root": null,
         "task": "PandaPickCubeGamepad-v0",
-        "num_episodes": 20,
+        "num_episodes": 10,
         "episode": 0,
         "pretrained_policy_name_or_path": null,
         "device": "cuda",
