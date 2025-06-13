@@ -191,7 +191,7 @@
             "init_final": 0.05
         },
         "actor_learner_config": {
-            "learner_host": "100.86.177.241",
+            "learner_host": "127.0.0.1",
             "learner_port": 50051,
             "policy_parameters_push_frequency": 50
         },

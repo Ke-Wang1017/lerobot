@@ -150,8 +150,8 @@
         "shared_encoder": true,
         "online_steps": 1000000,
         "online_env_seed": 10000,
-        "online_buffer_capacity": 100000,
-        "offline_buffer_capacity": 100000,
+        "online_buffer_capacity": 40000,
+        "offline_buffer_capacity": 40000,
         "online_step_before_learning": 100,
         "policy_update_freq": 1,
         "discount": 0.97,
@@ -191,7 +191,7 @@
             "init_final": 0.05
         },
         "actor_learner_config": {
-            "learner_host": "0.0.0.0",
+            "learner_host": "127.0.0.1", 
             "learner_port": 50051,
             "policy_parameters_push_frequency": 50
         },
