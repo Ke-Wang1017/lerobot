@@ -101,13 +101,13 @@ class DiscretePolicyConfig:
 @PreTrainedConfig.register_subclass("fql")
 @dataclass
 class FQLConfig(PreTrainedConfig):
-    """Soft Actor-Critic (SAC) configuration.
+    """Flow Q Learning (FQL) configuration.
 
-    SAC is an off-policy actor-critic deep RL algorithm based on the maximum entropy
+    FQL is an off-policy actor-critic deep RL algorithm based on the maximum entropy
     reinforcement learning framework. It learns a policy and a Q-function simultaneously
-    using experience collected from the environment.
+    using experience collected from the environment. It is based on the Flow-based Q-Learning (FQL) algorithm.
 
-    This configuration class contains all the parameters needed to define a SAC agent,
+    This configuration class contains all the parameters needed to define a FQL agent,
     including network architectures, optimization settings, and algorithm-specific
     hyperparameters.
     """
@@ -176,8 +176,8 @@ class FQLConfig(PreTrainedConfig):
     # Frequency of policy updates
     policy_update_freq: int = 1
 
-    # SAC algorithm parameters
-    # Discount factor for the SAC algorithm
+    # FQL algorithm parameters
+    # Discount factor for the FQL algorithm
     discount: float = 0.99
     # Initial temperature value
     temperature_init: float = 1.0
@@ -207,11 +207,11 @@ class FQLConfig(PreTrainedConfig):
     state_encoder_hidden_dim: int = 256
     # Dimension of the latent space
     latent_dim: int = 256
-    # Target entropy for the SAC algorithm
+    # Target entropy for the FQL algorithm
     target_entropy: float | None = None
-    # Whether to use backup entropy for the SAC algorithm
+    # Whether to use backup entropy for the FQL algorithm
     use_backup_entropy: bool = True
-    # Gradient clipping norm for the SAC algorithm
+    # Gradient clipping norm for the FQL algorithm
     grad_clip_norm: float = 40.0
 
     # Network configuration

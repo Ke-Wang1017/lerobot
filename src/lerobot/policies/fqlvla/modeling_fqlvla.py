@@ -100,14 +100,14 @@ class FQLVLAPolicy(
 
     def reset(self):
         """Reset the policy"""
-        # self.actor_bc_flow.encoder.vla.reset()
-        # self.actor_onestep_flow.encoder.vla.reset()
+        self.actor_bc_flow.encoder.vla.reset()
+        self.actor_onestep_flow.encoder.vla.reset()
         self._action_queue = deque([], maxlen=self.config.n_action_steps)
 
     @torch.no_grad
     def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
         """Predict a chunk of actions given environment observations."""
-        raise NotImplementedError("SACPolicy does not support action chunking. It returns single actions!")
+        raise NotImplementedError("FQLVLAPolicy does not support action chunking. It returns single actions!")
 
     # @torch.no_grad()
     # def compute_flow_actions(self, batch: dict[str, Tensor], noises: Tensor) -> Tensor:

@@ -1,6 +1,6 @@
 {
     "output_dir": null,
-    "job_name": "lilkm_pushfreq25",
+    "job_name": "lilkm_pick_lift_fql",
     "resume": false,
     "seed": 1000,
     "num_workers": 4,
@@ -10,7 +10,7 @@
     "save_checkpoint": true,
     "save_freq": 20000,
     "wandb": {
-        "enable": false,
+        "enable": false, 
         "project": "franka_sim_fql",
         "disable_artifact": true
     },
@@ -19,7 +19,7 @@
         "use_imagenet_stats": false
     },
     "policy": {
-        "type": "fql",
+        "type": "fqlvla",
         "push_to_hub": false,
         "n_obs_steps": 1,
         "normalization_mapping": {
