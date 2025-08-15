@@ -1,0 +1,315 @@
+{
+    "output_dir": null,
+    "job_name": "lilkm_pushfreq25",
+    "resume": false,
+    "seed": 1000,
+    "num_workers": 4,
+    "batch_size": 128,
+    "steps": 100000,
+    "log_freq": 1,
+    "save_checkpoint": true,
+    "save_freq": 20000,
+    "wandb": {
+        "enable": false,
+        "project": "franka_sim_fql",
+        "disable_artifact": true
+    },
+    "dataset": {
+        "repo_id": "lilkm/franka_sim_pick_lift_debugging",
+        "use_imagenet_stats": false
+    },
+    "policy": {
+        "type": "fql",
+        "push_to_hub": false,
+        "n_obs_steps": 1,
+        "normalization_mapping": {
+            "VISUAL": "MEAN_STD",
+            "STATE": "MIN_MAX",
+            "ENV": "MIN_MAX",
+            "ACTION": "MIN_MAX"
+        },
+        "input_features": {
+            "observation.images.front": {
+                "type": "VISUAL",
+                "shape": [
+                    3,
+                    128,
+                    128
+                ]
+            },
+            "observation.images.wrist": {
+                "type": "VISUAL",
+                "shape": [
+                    3,
+                    128,
+                    128
+                ]
+            },
+            "observation.state": {
+                "type": "STATE",
+                "shape": [
+                    18
+                ]
+            }
+        },
+        "output_features": {
+            "action": {
+                "type": "ACTION",
+                "shape": [
+                    3
+                ]
+            }
+        },
+        "device": "cuda",
+        "use_amp": false,
+        "dataset_stats": {
+            "observation.images.front": {
+                "mean": [
+                    0.485,
+                    0.456,
+                    0.406
+                ],
+                "std": [
+                    0.229,
+                    0.224,
+                    0.225
+                ]
+            },
+            "observation.images.wrist": {
+                "mean": [
+                    0.485,
+                    0.456,
+                    0.406
+                ],
+                "std": [
+                    0.229,
+                    0.224,
+                    0.225
+                ]
+            },
+            "observation.state": {
+                "min": [
+                    -0.18890867,
+                    -0.13319267,
+                    -0.15566483,
+                    -3.04198435,
+                    -0.05300621,
+                    2.52864378,
+                    0.426834,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    -100.0,
+                    0.0,
+                    0.2,
+                    -0.3,
+                    0.0
+                ],
+                "max": [
+                    0.1956124,
+                    0.5096723,
+                    0.05482981,
+                    -2.01792539,
+                    0.04425749,
+                    2.90565838,
+                    1.07170398,
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    255.0,
+                    0.6,
+                    0.3,
+                    0.5
+                ]
+            },
+            "action": {
+                "min": [
+                    -1.0,
+                    -1.0,
+                    -1.0,
+                    0.0
+                ],
+                "max": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    2.0
+                ]
+            }
+        },
+        "storage_device": "cpu",
+        "vision_encoder_name": "helper2424/resnet10",
+        "freeze_vision_encoder": true,
+        "image_encoder_hidden_dim": 32,
+        "shared_encoder": true,
+        "online_steps": 100000,
+        "online_env_seed": 10000,
+        "online_buffer_capacity": 20000,
+        "offline_buffer_capacity": 20000,
+        "online_step_before_learning": 100,
+        "policy_update_freq": 1,
+        "discount": 0.99,
+        "async_prefetch": false,
+        "temperature_init": 0.01,
+        "num_critics": 2,
+        "num_subsample_critics": null,
+        "critic_lr": 0.0003,
+        "actor_lr": 0.0003,
+        "temperature_lr": 0.0003,
+        "critic_target_update_weight": 0.005,
+        "q_agg": "mean",
+        "alpha": 3.0,
+        "flow_steps": 10,
+        "normalize_q_loss": true,
+        "utd_ratio": 2,
+        "state_encoder_hidden_dim": 256,
+        "latent_dim": 64,
+        "target_entropy": null,
+        "use_backup_entropy": true,
+        "grad_clip_norm": 10.0,
+        "num_discrete_actions": 3,
+        "critic_network_kwargs": {
+            "hidden_dims": [
+                256,
+                256,
+                256,
+                256
+            ],
+            "activate_final": true,
+            "layer_norm": true
+        },
+        "actor_network_kwargs": {
+            "hidden_dims": [
+                256,
+                256,
+                256,
+                256
+            ],
+            "activate_final": true,
+            "layer_norm": false
+        },
+        "policy_kwargs": {
+            "init_final": 1.0
+        },
+        "discrete_critic_network_kwargs": {
+            "hidden_dims": [
+                256
+            ],
+            "activate_final": true,
+            "final_activation": null,
+            "layer_norm": true
+        },
+        "discrete_actor_network_kwargs": {
+            "hidden_dims": [
+                256
+            ],
+            "activate_final": true,
+            "layer_norm": false
+        },
+        "discrete_policy_kwargs": {
+        },
+        "actor_learner_config": {
+            "learner_host": "127.0.0.1",
+            "learner_port": 50051,
+            "policy_parameters_push_frequency": 25
+        },
+        "concurrency": {
+            "actor": "threads",
+            "learner": "threads"
+        }
+    },
+    "env": {
+        "type": "hil",
+        "wrapper": {
+            "gripper_penalty": -0.02,
+            "display_cameras": false,
+            "add_joint_velocity_to_observation": true,
+            "add_ee_pose_to_observation": true,
+            "crop_params_dict": {
+                "observation.images.front": [
+                    0,
+                    0,
+                    128,
+                    128
+                ],
+                "observation.images.wrist": [
+                    0,
+                    0,
+                    128,
+                    128
+                ]
+            },
+            "resize_size": [
+                128,
+                128
+            ],
+            "control_time_s": 15.0,
+            "use_gripper": true,
+            "fixed_reset_joint_positions": [
+                0.0,
+                0.195,
+                0.0,
+                -2.43,
+                0.0,
+                2.62,
+                0.785
+            ],
+            "reset_time_s": 1.0
+        },
+        "name": "franka_sim",
+        "mode": null,
+        "repo_id": "lilkm/franka_sim_pick_lift_debugging",
+        "dataset_root": null,
+        "task": "PandaPickCubeKeyboard-v0",
+        "num_episodes": 30,
+        "episode": 0,
+        "pretrained_policy_name_or_path": null,
+        "device": "cuda",
+        "push_to_hub": false,
+        "fps": 10,
+        "features": {
+            "observation.images.front": {
+                "type": "VISUAL",
+                "shape": [
+                    3,
+                    128,
+                    128
+                ]
+            },
+            "observation.images.wrist": {
+                "type": "VISUAL",
+                "shape": [
+                    3,
+                    128,
+                    128
+                ]
+            },
+            "observation.state": {
+                "type": "STATE",
+                "shape": [
+                    18
+                ]
+            },
+            "action": {
+                "type": "ACTION",
+                "shape": [
+                    3
+                ]
+            }
+        },
+        "features_map": {
+            "observation.images.front": "observation.images.front",
+            "observation.images.wrist": "observation.images.wrist",
+            "observation.state": "observation.state",
+            "action": "action"
+        },
+        "reward_classifier_pretrained_path": null
+    }
+}

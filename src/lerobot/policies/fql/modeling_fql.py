@@ -256,32 +256,6 @@ class FQLPolicy(
 
             return {"loss_critic": loss_critic, "info": info}
 
-        # if model == "discrete_critic" and self.config.num_discrete_actions is not None:
-        #     # Extract critic-specific components
-        #     rewards: Tensor = batch["reward"]
-        #     next_observations: dict[str, Tensor] = batch["next_state"]
-        #     done: Tensor = batch["done"]
-        #     next_observation_features: Tensor = batch.get("next_observation_feature")
-        #     complementary_info = batch.get("complementary_info")
-        #     loss_discrete_critic, info = self.compute_loss_discrete_critic(
-        #         observations=observations,
-        #         actions=actions[:, 0],
-        #         rewards=rewards,
-        #         next_observations=next_observations,
-        #         done=done,
-        #         observation_features=observation_features,
-        #         next_observation_features=next_observation_features,
-        #         complementary_info=complementary_info,
-        #     )
-        #     return {"loss_discrete_critic": loss_discrete_critic, "info": info}
-        # if model == "actor":
-        #     return {
-        #         "loss_actor": self.compute_loss_actor(
-        #             observations=observations,
-        #             observation_features=observation_features,
-        #             actions=actions,
-        #         )
-        #     }
         if model == "actor_bc_flow":
             loss_actor_bc_flow, info = self.compute_loss_actor_bc_flow(
                 observations=observations,
@@ -298,16 +272,6 @@ class FQLPolicy(
                 actions_is_pad=actions_is_pad,
             )
             return {"loss_actor_onestep_flow": loss_actor_onestep_flow, "info": info}
-
-        # if model == "discrete_actor":
-        #     if self.config.num_discrete_actions is None:
-        #         raise ValueError("Discrete actor is not configured for this policy.")
-
-        #     loss_discrete_actor, info = self.compute_loss_discrete_actor(
-        #         observations=observations,
-        #         observation_features=observation_features,
-        #     )
-        #     return {"loss_discrete_actor": loss_discrete_actor, "info": info}
 
         if model == "temperature":
             return {
