@@ -182,4 +182,4 @@ class TrainPipelineConfig(HubMixin):
 @dataclass(kw_only=True)
 class TrainRLServerPipelineConfig(TrainPipelineConfig):
     dataset: DatasetConfig | None = None  # NOTE: In RL, we don't need an offline dataset
-    offline_learning_only: bool = False  # If True, the training will only use the offline dataset
+    do_offline_learning: bool = False  # If True, the training will only use the offline dataset

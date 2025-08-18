@@ -161,6 +161,10 @@ class FQLConfig(PreTrainedConfig):
     image_embedding_pooling_dim: int = 8
 
     # Training parameter
+    # Whether to only use offline learning
+    do_offline_learning: bool = True
+    # Number of steps for offline learning
+    offline_steps: int = 40000
     # Number of steps for online training
     online_steps: int = 1000000
     # Seed for the online environment
@@ -171,7 +175,7 @@ class FQLConfig(PreTrainedConfig):
     offline_buffer_capacity: int = 100000
     # Whether to use asynchronous prefetching for the buffers
     async_prefetch: bool = False
-    # Number of steps before learning starts
+    # Number of steps before learning starts to fill the replay buffer
     online_step_before_learning: int = 100
     # Frequency of policy updates
     policy_update_freq: int = 1

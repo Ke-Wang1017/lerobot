@@ -1,4 +1,4 @@
-# !/usr/bin/env python
+0# !/usr/bin/env python
 
 # Copyright 2025 The HuggingFace Inc. team.
 # All rights reserved.
@@ -71,10 +71,7 @@ from lerobot.constants import (
 from lerobot.datasets.factory import make_dataset
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_policy
-
-# from lerobot.policies.sac.modeling_sac import SACPolicy
-# from lerobot.policies.fql.modeling_fql import FQLPolicy
-from lerobot.policies.fqlvla.modeling_fqlvla import FQLVLAPolicy
+from lerobot.policies.sac.modeling_sac import SACPolicy
 from lerobot.robots import so100_follower  # noqa: F401
 from lerobot.scripts.rl import learner_service
 from lerobot.teleoperators import gamepad, so101_leader  # noqa: F401
@@ -315,7 +312,7 @@ def add_actor_information_and_train(
 
     logging.info("Initializing policy")
 
-    policy: FQLVLAPolicy = make_policy(
+    policy: SACPolicy = make_policy(
         cfg=cfg.policy,
         env_cfg=cfg.env,
     )
@@ -351,7 +348,6 @@ def add_actor_information_and_train(
     interaction_message = None
     optimization_step = resume_optimization_step if resume_optimization_step is not None else 0
     interaction_step_shift = resume_interaction_step if resume_interaction_step is not None else 0
-    do_offline_learning = cfg.policy.do_offline_learning
 
     dataset_repo_id = None
     if cfg.dataset is not None:
@@ -367,9 +363,6 @@ def add_actor_information_and_train(
         if shutdown_event is not None and shutdown_event.is_set():
             logging.info("[LEARNER] Shutdown signal received. Exiting...")
             break
-        if optimization_step >= cfg.policy.offline_steps and do_offline_learning:
-            do_offline_learning = False
-            logging.info("[LEARNER] Offline learning finished")
 
         # Process all available transitions to the replay buffer, send by the actor server
         process_transitions(
@@ -379,7 +372,6 @@ def add_actor_information_and_train(
             device=device,
             dataset_repo_id=dataset_repo_id,
             shutdown_event=shutdown_event,
-            # chunk_size=cfg.policy.chunk_size,
         )
 
         # Process all available interaction messages sent by the actor server
@@ -396,60 +388,31 @@ def add_actor_information_and_train(
 
         if online_iterator is None:
             online_iterator = replay_buffer.get_iterator(
-                batch_size=batch_size,
-                async_prefetch=async_prefetch,
-                queue_size=2,
-                n_steps=cfg.policy.chunk_size,
-                gamma=cfg.policy.discount,
+                batch_size=batch_size, async_prefetch=async_prefetch, queue_size=2
             )
 
         if offline_replay_buffer is not None and offline_iterator is None:
             offline_iterator = offline_replay_buffer.get_iterator(
-                batch_size=batch_size,
-                async_prefetch=async_prefetch,
-                queue_size=2,
-                n_steps=cfg.policy.chunk_size,
-                gamma=cfg.policy.discount,
+                batch_size=batch_size, async_prefetch=async_prefetch, queue_size=2
             )
 
         time_for_one_optimization_step = time.time()
         for _ in range(utd_ratio - 1):
             # Sample from the iterators
-            if do_offline_learning:
-                batch = next(online_iterator)
+            batch = next(online_iterator)
 
-                if dataset_repo_id is not None:
-                    batch_offline = next(offline_iterator)
-                    # batch_offline["action_is_pad"]
-                    # batch = batch_offline
-                    batch = concatenate_batch_transitions(
-                        left_batch_transitions=batch, right_batch_transition=batch_offline
-                    )
-                    # batch["action_is_pad"]
-            else:
-                batch = next(offline_iterator)
+            if dataset_repo_id is not None:
+                batch_offline = next(offline_iterator)
+                batch = concatenate_batch_transitions(
+                    left_batch_transitions=batch, right_batch_transition=batch_offline
+                )
 
             actions = batch["action"]
             rewards = batch["reward"]
             observations = batch["state"]
             next_observations = batch["next_state"]
             done = batch["done"]
-            
-            # Handle actions_is_pad with fallback
-            if "action_is_pad" in batch:
-                actions_is_pad = batch["action_is_pad"]
-            else:
-                # Create default padding tensor if not present
-                actions_is_pad = torch.zeros(actions.shape[0], actions.shape[1], dtype=torch.bool, device=actions.device)
-                logging.debug(f"Created default actions_is_pad tensor with shape: {actions_is_pad.shape}")
-            
             check_nan_in_transition(observations=observations, actions=actions, next_state=next_observations)
-
-            reward_nsteps = batch["reward_nsteps"]
-            next_observation_nsteps = batch["next_state_nsteps"]
-            done_nsteps = batch["done_nsteps"]
-            truncated_nsteps = batch["truncated_nsteps"]
-            discount_nsteps = batch["discount_nsteps"]
 
             observation_features, next_observation_features = get_observation_features(
                 policy=policy, observations=observations, next_observations=next_observations
@@ -458,9 +421,6 @@ def add_actor_information_and_train(
             # Create a batch dictionary with all required elements for the forward method
             forward_batch = {
                 "action": actions,
-                "actions_is_pad": actions_is_pad,
-                # "actions_is_pad": torch.zeros_like(actions, dtype=torch.bool),
-                # "actions_is_pad": torch.zeros(*actions.shape[:-1], dtype=torch.bool, device=actions.device),
                 "reward": rewards,
                 "state": observations,
                 "next_state": next_observations,
@@ -468,11 +428,6 @@ def add_actor_information_and_train(
                 "observation_feature": observation_features,
                 "next_observation_feature": next_observation_features,
                 "complementary_info": batch["complementary_info"],
-                "reward_nsteps": reward_nsteps,
-                "next_state_nsteps": next_observation_nsteps,
-                "done_nsteps": done_nsteps,
-                "truncated_nsteps": truncated_nsteps,
-                "discount_nsteps": discount_nsteps,
             }
 
             # Use the forward method for critic loss
@@ -481,63 +436,40 @@ def add_actor_information_and_train(
             # Main critic optimization
             loss_critic = critic_output["loss_critic"]
             optimizers["critic"].zero_grad()
-            # optimizers["discrete_critic"].zero_grad()  # Reset discrete critic optimizer if available
             loss_critic.backward()
             critic_grad_norm = torch.nn.utils.clip_grad_norm_(
                 parameters=policy.critic_ensemble.parameters(), max_norm=clip_grad_norm_value
             )
-            # discrete_critic_grad_norm = torch.nn.utils.clip_grad_norm_(
-            #     parameters=policy.discrete_critic.parameters(), max_norm=clip_grad_norm_value
-            # )
             optimizers["critic"].step()
-            # optimizers["discrete_critic"].step()  # Step discrete critic optimizer if available
 
             # Discrete critic optimization (if available)
-            # if policy.config.num_discrete_actions is not None:
-            #     discrete_critic_output = policy.forward(forward_batch, model="discrete_critic")
-            #     loss_discrete_critic = discrete_critic_output["loss_discrete_critic"]
-            #     optimizers["discrete_critic"].zero_grad()
-            #     loss_discrete_critic.backward()
-            #     discrete_critic_grad_norm = torch.nn.utils.clip_grad_norm_(
-            #         parameters=policy.discrete_critic.parameters(), max_norm=clip_grad_norm_value
-            #     )
-            #     optimizers["discrete_critic"].step()
+            if policy.config.num_discrete_actions is not None:
+                discrete_critic_output = policy.forward(forward_batch, model="discrete_critic")
+                loss_discrete_critic = discrete_critic_output["loss_discrete_critic"]
+                optimizers["discrete_critic"].zero_grad()
+                loss_discrete_critic.backward()
+                discrete_critic_grad_norm = torch.nn.utils.clip_grad_norm_(
+                    parameters=policy.discrete_critic.parameters(), max_norm=clip_grad_norm_value
+                )
+                optimizers["discrete_critic"].step()
 
             # Update target networks (main and discrete)
             policy.update_target_networks()
 
-        if do_offline_learning:
-            # Sample for the last update in the UTD ratio
-            batch = next(online_iterator)
+        # Sample for the last update in the UTD ratio
+        batch = next(online_iterator)
 
-            if dataset_repo_id is not None:
-                batch_offline = next(offline_iterator)
-
-                batch = concatenate_batch_transitions(
-                    left_batch_transitions=batch, right_batch_transition=batch_offline
-                )
-        else:
-            batch = next(offline_iterator)
+        if dataset_repo_id is not None:
+            batch_offline = next(offline_iterator)
+            batch = concatenate_batch_transitions(
+                left_batch_transitions=batch, right_batch_transition=batch_offline
+            )
 
         actions = batch["action"]
         rewards = batch["reward"]
         observations = batch["state"]
         next_observations = batch["next_state"]
         done = batch["done"]
-        
-        # Handle actions_is_pad with fallback
-        if "action_is_pad" in batch:
-            actions_is_pad = batch["action_is_pad"]
-        else:
-            # Create default padding tensor if not present
-            actions_is_pad = torch.zeros(actions.shape[0], actions.shape[1], dtype=torch.bool, device=actions.device)
-            logging.debug(f"Created default actions_is_pad tensor with shape: {actions_is_pad.shape}")
-
-        reward_nsteps = batch["reward_nsteps"]
-        next_observation_nsteps = batch["next_state_nsteps"]
-        done_nsteps = batch["done_nsteps"]
-        truncated_nsteps = batch["truncated_nsteps"]
-        discount_nsteps = batch["discount_nsteps"]
 
         check_nan_in_transition(observations=observations, actions=actions, next_state=next_observations)
 
@@ -548,139 +480,79 @@ def add_actor_information_and_train(
         # Create a batch dictionary with all required elements for the forward method
         forward_batch = {
             "action": actions,
-            "actions_is_pad": actions_is_pad,
             "reward": rewards,
             "state": observations,
             "next_state": next_observations,
             "done": done,
             "observation_feature": observation_features,
             "next_observation_feature": next_observation_features,
-            "reward_nsteps": reward_nsteps,
-            "next_state_nsteps": next_observation_nsteps,
-            "done_nsteps": done_nsteps,
-            "truncated_nsteps": truncated_nsteps,
-            "discount_nsteps": discount_nsteps,
         }
 
         critic_output = policy.forward(forward_batch, model="critic")
 
         loss_critic = critic_output["loss_critic"]
         optimizers["critic"].zero_grad()
-        # optimizers["discrete_critic"].zero_grad()  # Reset discrete critic optimizer if available
         loss_critic.backward()
         critic_grad_norm = torch.nn.utils.clip_grad_norm_(
             parameters=policy.critic_ensemble.parameters(), max_norm=clip_grad_norm_value
         ).item()
-        # discrete_critic_grad_norm = torch.nn.utils.clip_grad_norm_(
-        #         parameters=policy.discrete_critic.parameters(), max_norm=clip_grad_norm_value
-        #     ).item()
         optimizers["critic"].step()
-        # optimizers["discrete_critic"].step()  # Step discrete critic optimizer if available
 
         # Initialize training info dictionary
         training_infos = {
             "loss_critic": loss_critic.item(),
             "critic_grad_norm": critic_grad_norm,
-            # "discrete_critic_grad_norm": discrete_critic_grad_norm,
         }
 
-        if "info" in critic_output:
-            for k, v in critic_output["info"].items():
-                training_infos[f"critic_{k}"] = v.item()
-
         # Discrete critic optimization (if available)
-        # if policy.config.num_discrete_actions is not None:
-        #     discrete_critic_output = policy.forward(forward_batch, model="discrete_critic")
-        #     loss_discrete_critic = discrete_critic_output["loss_discrete_critic"]
-        #     optimizers["discrete_critic"].zero_grad()
-        #     loss_discrete_critic.backward()
-        #     discrete_critic_grad_norm = torch.nn.utils.clip_grad_norm_(
-        #         parameters=policy.discrete_critic.parameters(), max_norm=clip_grad_norm_value
-        #     ).item()
-        #     optimizers["discrete_critic"].step()
+        if policy.config.num_discrete_actions is not None:
+            discrete_critic_output = policy.forward(forward_batch, model="discrete_critic")
+            loss_discrete_critic = discrete_critic_output["loss_discrete_critic"]
+            optimizers["discrete_critic"].zero_grad()
+            loss_discrete_critic.backward()
+            discrete_critic_grad_norm = torch.nn.utils.clip_grad_norm_(
+                parameters=policy.discrete_critic.parameters(), max_norm=clip_grad_norm_value
+            ).item()
+            optimizers["discrete_critic"].step()
 
-        #     # Add discrete critic info to training info
-        #     training_infos["loss_discrete_critic"] = loss_discrete_critic.item()
-        #     training_infos["discrete_critic_grad_norm"] = discrete_critic_grad_norm
-
-        #     if "info" in discrete_critic_output:
-        #         for k, v in discrete_critic_output["info"].items():
-        #             training_infos[f"discrete_critic_{k}"] = v.item()
+            # Add discrete critic info to training info
+            training_infos["loss_discrete_critic"] = loss_discrete_critic.item()
+            training_infos["discrete_critic_grad_norm"] = discrete_critic_grad_norm
 
         # Actor and temperature optimization (at specified frequency)
         if optimization_step % policy_update_freq == 0:
             for _ in range(policy_update_freq):
-                # Actor BC flow optimization
-                actor_bc_flow_output = policy.forward(forward_batch, model="actor_bc_flow")
-                loss_actor_bc_flow = actor_bc_flow_output["loss_actor_bc_flow"]
-                optimizers["actor_bc_flow"].zero_grad()
-                loss_actor_bc_flow.backward()
-                actor_bc_flow_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    parameters=policy.actor_bc_flow.parameters(), max_norm=clip_grad_norm_value
-                ).item()
-                optimizers["actor_bc_flow"].step()
-
-                # Add actor info to training info
-                training_infos["loss_actor_bc_flow"] = loss_actor_bc_flow.item()
-                training_infos["actor_bc_flow_grad_norm"] = actor_bc_flow_grad_norm
-
-                if "info" in actor_bc_flow_output:
-                    for k, v in actor_bc_flow_output["info"].items():
-                        training_infos[f"actor_bc_flow_{k}"] = v.item()
-
                 # Actor optimization
-                # discrete_actor_output = policy.forward(forward_batch, model="discrete_actor")
-                # loss_discrete_actor = discrete_actor_output["loss_discrete_actor"]
-                # optimizers["discrete_actor"].zero_grad()
-                # loss_discrete_actor.backward()
-                # discrete_actor_grad_norm = torch.nn.utils.clip_grad_norm_(
-                #     parameters=policy.discrete_actor.parameters(), max_norm=clip_grad_norm_value
-                # ).item()
-                # optimizers["discrete_actor"].step()
-
-                # # Add actor info to training info
-                # training_infos["loss_discrete_actor"] = loss_discrete_actor.item()
-                # training_infos["discrete_actor_grad_norm"] = discrete_actor_grad_norm
-
-                # if "info" in discrete_actor_output:
-                #     for k, v in discrete_actor_output["info"].items():
-                #         training_infos[f"discrete_actor_{k}"] = v.item()
-
-                # Actor onestep flow optimization
-                actor_onestep_flow_output = policy.forward(forward_batch, model="actor_onestep_flow")
-                loss_actor_onestep_flow = actor_onestep_flow_output["loss_actor_onestep_flow"]
-                optimizers["actor_onestep_flow"].zero_grad()
-                loss_actor_onestep_flow.backward()
-                actor_onestep_flow_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    parameters=policy.actor_onestep_flow.parameters(), max_norm=clip_grad_norm_value
+                actor_output = policy.forward(forward_batch, model="actor")
+                loss_actor = actor_output["loss_actor"]
+                optimizers["actor"].zero_grad()
+                loss_actor.backward()
+                actor_grad_norm = torch.nn.utils.clip_grad_norm_(
+                    parameters=policy.actor.parameters(), max_norm=clip_grad_norm_value
                 ).item()
-                optimizers["actor_onestep_flow"].step()
+                optimizers["actor"].step()
 
                 # Add actor info to training info
-                training_infos["loss_actor_onestep_flow"] = loss_actor_onestep_flow.item()
-                training_infos["actor_onestep_flow_grad_norm"] = actor_onestep_flow_grad_norm
-
-                if "info" in actor_onestep_flow_output:
-                    for k, v in actor_onestep_flow_output["info"].items():
-                        training_infos[f"actor_onestep_flow_{k}"] = v.item()
+                training_infos["loss_actor"] = loss_actor.item()
+                training_infos["actor_grad_norm"] = actor_grad_norm
 
                 # Temperature optimization
-                # temperature_output = policy.forward(forward_batch, model="temperature")
-                # loss_temperature = temperature_output["loss_temperature"]
-                # optimizers["temperature"].zero_grad()
-                # loss_temperature.backward()
-                # temp_grad_norm = torch.nn.utils.clip_grad_norm_(
-                #     parameters=[policy.log_alpha], max_norm=clip_grad_norm_value
-                # ).item()
-                # optimizers["temperature"].step()
+                temperature_output = policy.forward(forward_batch, model="temperature")
+                loss_temperature = temperature_output["loss_temperature"]
+                optimizers["temperature"].zero_grad()
+                loss_temperature.backward()
+                temp_grad_norm = torch.nn.utils.clip_grad_norm_(
+                    parameters=[policy.log_alpha], max_norm=clip_grad_norm_value
+                ).item()
+                optimizers["temperature"].step()
 
-                # # Add temperature info to training info
-                # training_infos["loss_temperature"] = loss_temperature.item()
-                # training_infos["temperature_grad_norm"] = temp_grad_norm
-                # training_infos["temperature"] = policy.temperature
+                # Add temperature info to training info
+                training_infos["loss_temperature"] = loss_temperature.item()
+                training_infos["temperature_grad_norm"] = temp_grad_norm
+                training_infos["temperature"] = policy.temperature
 
-                # # Update temperature
-                # policy.update_temperature()
+                # Update temperature
+                policy.update_temperature()
 
         # Push policy to actors if needed
         if time.time() - last_time_policy_pushed > policy_parameters_push_frequency:
@@ -921,53 +793,29 @@ def make_optimizers_and_scheduler(cfg: TrainRLServerPipelineConfig, policy: nn.M
         - `lr_scheduler`: Currently set to `None` but can be extended to support learning rate scheduling.
 
     """
-    params_to_skip = [
-        "encoder.vla.model.vlm_with_expert.vlm.",
-        # "encoder.vla.model.state_proj.",
-    ]
-    optimizer_actor_bc_flow = torch.optim.Adam(
+    optimizer_actor = torch.optim.Adam(
         params=[
             p
-            for n, p in policy.actor_bc_flow.named_parameters()
-            # if not policy.config.shared_encoder or not n.startswith("encoder")
-            if not any(n.startswith(p) for p in params_to_skip)
-        ],
-        lr=cfg.policy.actor_lr,
-    )
-    optimizer_actor_onestep_flow = torch.optim.Adam(
-        params=[
-            p
-            for n, p in policy.actor_onestep_flow.named_parameters()
-            # if not policy.config.shared_encoder or not n.startswith("encoder")
-            if not any(n.startswith(p) for p in params_to_skip)
+            for n, p in policy.actor.named_parameters()
+            if not policy.config.shared_encoder or not n.startswith("encoder")
         ],
         lr=cfg.policy.actor_lr,
     )
     optimizer_critic = torch.optim.Adam(params=policy.critic_ensemble.parameters(), lr=cfg.policy.critic_lr)
 
-    # if cfg.policy.num_discrete_actions is not None:
-    #     optimizer_discrete_critic = torch.optim.Adam(
-    #         params=policy.discrete_critic.parameters(), lr=cfg.policy.critic_lr
-    #     )
-    #     optimizer_discrete_actor = torch.optim.Adam(
-    #         params=[
-    #             p
-    #             for n, p in policy.discrete_actor.named_parameters()
-    #             if not policy.config.shared_encoder or not n.startswith("encoder")
-    #         ],
-    #         lr=cfg.policy.actor_lr,
-    #     )
+    if cfg.policy.num_discrete_actions is not None:
+        optimizer_discrete_critic = torch.optim.Adam(
+            params=policy.discrete_critic.parameters(), lr=cfg.policy.critic_lr
+        )
     optimizer_temperature = torch.optim.Adam(params=[policy.log_alpha], lr=cfg.policy.critic_lr)
     lr_scheduler = None
     optimizers = {
-        "actor_bc_flow": optimizer_actor_bc_flow,
-        "actor_onestep_flow": optimizer_actor_onestep_flow,
+        "actor": optimizer_actor,
         "critic": optimizer_critic,
         "temperature": optimizer_temperature,
     }
-    # if cfg.policy.num_discrete_actions is not None:
-    #     optimizers["discrete_critic"] = optimizer_discrete_critic
-    #     optimizers["discrete_actor"] = optimizer_discrete_actor
+    if cfg.policy.num_discrete_actions is not None:
+        optimizers["discrete_critic"] = optimizer_discrete_critic
     return optimizers, lr_scheduler
 
 
@@ -1180,7 +1028,7 @@ def initialize_offline_replay_buffer(
 
 
 def get_observation_features(
-    policy: FQLVLAPolicy, observations: torch.Tensor, next_observations: torch.Tensor
+    policy: SACPolicy, observations: torch.Tensor, next_observations: torch.Tensor
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     """
     Get observation features from the policy encoder. It act as cache for the observation features.
@@ -1196,20 +1044,16 @@ def get_observation_features(
         tuple: observation_features, next_observation_features
     """
 
-    return None, None
+    if policy.config.vision_encoder_name is None or not policy.config.freeze_vision_encoder:
+        return None, None
 
-    # if policy.config.vision_encoder_name is None or not policy.config.freeze_vision_encoder:
-    #     return None, None
+    with torch.no_grad():
+        observation_features = policy.actor.encoder.get_cached_image_features(observations, normalize=True)
+        next_observation_features = policy.actor.encoder.get_cached_image_features(
+            next_observations, normalize=True
+        )
 
-    # with torch.no_grad():
-    #     observation_features = policy.actor_onestep_flow.encoder.get_cached_image_features(
-    #         observations, normalize=True
-    #     )
-    #     next_observation_features = policy.actor_onestep_flow.encoder.get_cached_image_features(
-    #         next_observations, normalize=True
-    #     )
-
-    # return observation_features, next_observation_features
+    return observation_features, next_observation_features
 
 
 def use_threads(cfg: TrainRLServerPipelineConfig) -> bool:
@@ -1266,44 +1110,14 @@ def push_actor_policy_to_queue(parameters_queue: Queue, policy: nn.Module):
     logging.debug("[LEARNER] Pushing actor policy to the queue")
 
     # Create a dictionary to hold all the state dicts
-    state_dicts = {
-        "policy": move_state_dict_to_device(
-            {
-                k: v
-                for k, v in policy.actor_onestep_flow.state_dict().items()
-                if not any(k.startswith(p) for p in ("encoder.vla.model.vlm_with_expert.vlm.",))
-            },
-            device="cpu",
+    state_dicts = {"policy": move_state_dict_to_device(policy.actor.state_dict(), device="cpu")}
+
+    # Add discrete critic if it exists
+    if hasattr(policy, "discrete_critic") and policy.discrete_critic is not None:
+        state_dicts["discrete_critic"] = move_state_dict_to_device(
+            policy.discrete_critic.state_dict(), device="cpu"
         )
-    }
-
-    # # Add discrete critic if it exists
-    # if hasattr(policy, "discrete_critic") and policy.discrete_critic is not None:
-    #     state_dicts["discrete_critic"] = move_state_dict_to_device(
-    #         policy.discrete_critic.state_dict(), device="cpu"
-    #     )
-    #     logging.debug("[LEARNER] Including discrete critic in state dict push")
-
-    # Add actor_bc_flow if it exists
-    # if hasattr(policy, "actor_bc_flow") and policy.actor_bc_flow is not None:
-    #     state_dicts["actor_bc_flow"] = move_state_dict_to_device(
-    #         {
-    #             k: v
-    #             for k, v in policy.actor_bc_flow.state_dict().items()
-    #             if not any(
-    #                 k.startswith(p) for p in ("encoder.vla.model.vlm_with_expert.vlm.",)
-    #             )
-    #         },
-    #         device="cpu",
-    #     )
-    #     logging.debug("[LEARNER] Including actor_bc_flow in state dict push")
-
-    # Add discrete actor if it exists
-    if hasattr(policy, "discrete_actor") and policy.discrete_actor is not None:
-        state_dicts["discrete_actor"] = move_state_dict_to_device(
-            policy.discrete_actor.state_dict(), device="cpu"
-        )
-        logging.debug("[LEARNER] Including discrete actor in state dict push")
+        logging.debug("[LEARNER] Including discrete critic in state dict push")
 
     state_bytes = state_to_bytes(state_dicts)
     parameters_queue.put(state_bytes)
@@ -1331,7 +1145,6 @@ def process_transitions(
     device: str,
     dataset_repo_id: str | None,
     shutdown_event: any,
-    # chunk_size: int,
 ):
     """Process all available transitions from the queue.
 
@@ -1358,45 +1171,6 @@ def process_transitions(
             ):
                 logging.warning("[LEARNER] NaN detected in transition, skipping")
                 continue
-
-            # # pad to [1, 50, 4]
-            # action = transition["action"] # [1, 4]
-            # action = einops.repeat(action, "b a -> b e a", e=chunk_size)
-            # transition["action"] = action
-
-            # transition["action_is_pad"] = torch.cat([
-            #     torch.zeros(action.shape[0], 1, dtype=torch.bool,device=action.device),
-            #     torch.ones(action.shape[0], chunk_size-1, dtype=torch.bool, device=action.device)
-            # ], dim=1)
-
-            # reward = transition["reward"]
-            # reward = einops.repeat(reward, "b -> b e", e=chunk_size)
-            # transition["reward"] = reward
-
-            # done = transition["done"]
-            # done = einops.repeat(done, "b -> b e", e=chunk_size)
-            # transition["done"] = done
-
-            # state = transition["state"]
-            # # ['observation.images.front', 'observation.images.wrist', 'observation.state']
-            # # Actual state and next chunk size is chunk_size+1
-            # for k in state.keys():
-            #     if state[k].dim() == 2:
-            #         # If the state is 2D, we need to repeat it to match the chunk size
-            #         state[k] = einops.repeat(state[k], "b a -> b e a", e=chunk_size+1)
-            #     elif state[k].dim() == 3:
-            #         # If the state is 3D, we need to repeat it to match the chunk size
-            #         state[k] = einops.repeat(state[k], "b c h -> b e c h", e=chunk_size+1)
-            #     elif state[k].dim() == 4:
-            #         # If the state is 4D, we need to repeat it to match the chunk size
-            #         state[k] = einops.repeat(state[k], "b c h w -> b e c h w", e=chunk_size+1)
-            #     else:
-            #         raise ValueError(
-            #             f"Unsupported state dimension {state[k].dim()} for key {k}. Expected 2D or 3D tensor."
-            #         )
-            # transition["state"] = state
-
-            # import pdb; pdb.set_trace()
 
             replay_buffer.add(**transition)
 

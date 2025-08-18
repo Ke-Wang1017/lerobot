@@ -85,7 +85,6 @@ class FQLPolicy(
                 if not n.startswith("encoder") or not self.shared_encoder
             ],
             "critic": self.critic_ensemble.parameters(),
-            # "temperature": self.log_alpha,
         }
         if self.config.num_discrete_actions is not None:
             optim_params["discrete_critic"] = self.discrete_critic.parameters()
@@ -155,12 +154,6 @@ class FQLPolicy(
 
         actions = self._action_queue.popleft()
 
-        # if self.config.num_discrete_actions is not None:
-        #     discrete_action, _, _ = self.discrete_actor(batch, observations_features)
-        #     # discrete_action_value = self.discrete_critic(batch, observations_features)
-        #     # discrete_action = torch.argmax(discrete_action_value, dim=-1, keepdim=True)
-        #     actions = torch.cat([actions, discrete_action.unsqueeze(-1)], dim=-1)
-
         return actions
 
     def critic_forward(
@@ -185,28 +178,7 @@ class FQLPolicy(
         critics = self.critic_target if use_target else self.critic_ensemble
         q_values = critics(observations, actions, observation_features, do_output_normalization)
         return q_values
-
-    # def discrete_critic_forward(
-    #     self,
-    #     observations,
-    #     actions: Tensor,
-    #     use_target=False,
-    #     observation_features=None
-    # ) -> torch.Tensor:
-    #     """Forward pass through a discrete critic network
-
-    #     Args:
-    #         observations: Dictionary of observations
-    #         use_target: If True, use target critics, otherwise use ensemble critics
-    #         observation_features: Optional pre-computed observation features to avoid recomputing encoder output
-
-    #     Returns:
-    #         Tensor of Q-values from the discrete critic network
-    #     """
-    #     discrete_critic = self.discrete_critic_target if use_target else self.discrete_critic
-    #     q_values = discrete_critic(observations, actions, observation_features)
-    #     return q_values
-
+    
     def forward(
         self,
         batch: dict[str, Tensor | dict[str, Tensor]],
@@ -264,6 +236,7 @@ class FQLPolicy(
                 actions_is_pad=actions_is_pad,
             )
             return {"loss_actor_bc_flow": loss_actor_bc_flow, "info": info}
+        
         if model == "actor_onestep_flow":
             loss_actor_onestep_flow, info = self.compute_loss_actor_onestep_flow(
                 observations=observations,
@@ -272,14 +245,6 @@ class FQLPolicy(
                 actions_is_pad=actions_is_pad,
             )
             return {"loss_actor_onestep_flow": loss_actor_onestep_flow, "info": info}
-
-        if model == "temperature":
-            return {
-                "loss_temperature": self.compute_loss_temperature(
-                    observations=observations,
-                    observation_features=observation_features,
-                )
-            }
 
         raise ValueError(f"Unknown model type: {model}")
 
@@ -294,19 +259,6 @@ class FQLPolicy(
                 param.data * self.config.critic_target_update_weight
                 + target_param.data * (1.0 - self.config.critic_target_update_weight)
             )
-        # if self.config.num_discrete_actions is not None:
-        #     for target_param, param in zip(
-        #         self.discrete_critic_target.parameters(),
-        #         self.discrete_critic.parameters(),
-        #         strict=True,
-        #     ):
-        #         target_param.data.copy_(
-        #             param.data * self.config.critic_target_update_weight
-        #             + target_param.data * (1.0 - self.config.critic_target_update_weight)
-        #         )
-
-    def update_temperature(self):
-        self.temperature = self.log_alpha.exp().item()
 
     def compute_loss_critic(
         self,
@@ -320,6 +272,14 @@ class FQLPolicy(
         observation_features: Tensor | None = None,
         next_observation_features: Tensor | None = None,
     ) -> Tensor:
+        # Debug tensor shapes at the beginning
+        if actions is not None:
+            logging.debug(f"compute_loss_critic - actions shape: {actions.shape}")
+        if actions_is_pad is not None:
+            logging.debug(f"compute_loss_critic - actions_is_pad shape: {actions_is_pad.shape}")
+        else:
+            logging.debug("compute_loss_critic - actions_is_pad is None")
+            
         actions = self.normalize_targets({"action": actions})["action"]
 
         with torch.no_grad():
@@ -330,11 +290,11 @@ class FQLPolicy(
                 batch_shape, action_dim, device=next_observations["observation.state"].device
             )
             next_actions, _, _ = self.actor_onestep_flow(next_observations, next_observation_features, noises)
-            # next_actions = self.select_action(next_observations)
 
             next_actions = torch.clamp(next_actions, -1.0, 1.0)
 
             # 2- compute q targets
+            # TODO: Use ensemble of critics to compute the q targets
             next_qs = self.critic_forward(
                 observations=next_observations,
                 actions=next_actions,
@@ -360,22 +320,38 @@ class FQLPolicy(
             else:
                 next_q = next_qs.mean(dim=0)
 
-            # if self.config.use_backup_entropy:
-            #     min_q = min_q - (self.temperature * next_log_probs)
 
             td_target = rewards.squeeze(-1) + (1 - done) * discounts.squeeze(-1) * next_q
             # td_target = rewards + (1 - done) * self.config.discount * next_q
 
         # 3- compute predicted qs
-        # if self.config.num_discrete_actions is not None:
-        #     # NOTE: We only want to keep the continuous action part
-        #     # In the buffer we have the full action space (continuous + discrete)
-        #     # We need to split them before concatenating them in the critic forward
-        #     actions: Tensor = actions[:, : ,:DISCRETE_DIMENSION_INDEX]
+        # NOTE: We only want to keep the continuous action part
+        # In the buffer we have the full action space (continuous + discrete)
+        # We need to split them before concatenating them in the critic forward
 
-        # actions = actions[:, 0, :3] # TODO: use all chunks
-        # actions = actions * (~actions_is_pad).unsqueeze(-1)
+        actions = actions[:, 0, :3] # TODO: use all chunks
+        
+        # Validate tensor shapes and handle padding correctly
+        if actions_is_pad is not None:
+            # actions_is_pad has shape (batch, chunk) and actions has shape (batch, action_dim)
+            # We need to handle the padding correctly for the first chunk only
+            if actions_is_pad.dim() == 2 and actions.dim() == 3:
+                actions_is_pad_first_chunk = actions_is_pad[:, 0]  # Take first chunk padding info
+                # Ensure shapes are compatible for broadcasting
+                if actions_is_pad_first_chunk.shape[0] == actions.shape[0]:
+                    actions = actions * (~actions_is_pad_first_chunk).unsqueeze(-1)
+                else:
+                    logging.warning(f"Shape mismatch: actions_is_pad_first_chunk {actions_is_pad_first_chunk.shape} vs actions {actions.shape}")
+            else:
+                logging.warning(f"Unexpected tensor dimensions: actions_is_pad {actions_is_pad.shape}, actions {actions.shape}")
+        
         actions = actions[:, :, :].reshape(actions.shape[0], -1)  # [32, 150]
+        
+        # Debug tensor shapes
+        if torch.isnan(actions).any():
+            logging.warning(f"NaN detected in actions after processing. Shape: {actions.shape}")
+            if actions_is_pad is not None:
+                logging.warning(f"actions_is_pad shape: {actions_is_pad.shape}")
 
         q_preds = self.critic_forward(
             observations=observations,
@@ -390,8 +366,12 @@ class FQLPolicy(
         td_target_duplicate = einops.repeat(td_target, "b -> e b", e=q_preds.shape[0])
         # You compute the mean loss of the batch for each critic and then to compute the final loss you sum them up
 
-        q_preds = q_preds[:, ~actions_is_pad[:, -1]]
-        td_target_duplicate = td_target_duplicate[:, ~actions_is_pad[:, -1]]
+        # Fix indexing: use first chunk padding info for consistency
+        if actions_is_pad is not None and actions_is_pad.dim() == 2:
+            q_preds = q_preds[:, ~actions_is_pad[:, 0]]
+            td_target_duplicate = td_target_duplicate[:, ~actions_is_pad[:, 0]]
+        else:
+            logging.warning(f"actions_is_pad is None or has unexpected shape: {actions_is_pad.shape if actions_is_pad is not None else 'None'}")
 
         critics_loss = (
             F.mse_loss(
@@ -406,11 +386,7 @@ class FQLPolicy(
             "predicted_qs": torch.mean(q_preds),
             "target_qs": torch.mean(td_target_duplicate),
             "rewards": rewards.mean(),
-            "actions_is_pad": torch.mean(actions_is_pad.float()),
-            # "discrete_critic_loss": discrete_critic_loss,
-            # "discrete_predicted_qs": torch.mean(predicted_discrete_qs),
-            # "discrete_target_qs": torch.mean(target_discrete_q_duplicate),
-            # "discrete_rewards": rewards_discrete.mean(),
+            "actions_is_pad": torch.mean(actions_is_pad.float()) if actions_is_pad is not None else 0.0,
         }
 
         return critics_loss, info
@@ -440,7 +416,11 @@ class FQLPolicy(
         vel_pred = vel_pred.reshape(batch_size, actions_is_pad.shape[1], -1)
 
         bc_flow_loss = F.mse_loss(input=vel_pred, target=vel, reduction="none")  # (128, 10, 3)
-        bc_flow_loss = bc_flow_loss * (~actions_is_pad).unsqueeze(-1)
+        # Fix broadcasting: actions_is_pad has shape (batch, chunk) and vel_pred has shape (batch, chunk, action_dim)
+        if actions_is_pad is not None and actions_is_pad.dim() == 2:
+            bc_flow_loss = bc_flow_loss * (~actions_is_pad).unsqueeze(-1)
+        else:
+            logging.warning(f"actions_is_pad is None or has unexpected shape in BC flow: {actions_is_pad.shape if actions_is_pad is not None else 'None'}")
         bc_flow_loss = bc_flow_loss.mean()
 
         info = {
@@ -533,11 +513,6 @@ class FQLPolicy(
             if self.shared_encoder
             else SACObservationEncoder(self.config, self.normalize_inputs)
         )
-        # self.encoder_discrete_actor = (
-        #     self.encoder_critic
-        #     if self.shared_encoder
-        #     else SACObservationEncoder(self.config, self.normalize_inputs)
-        # )
 
     def _init_critics(self, continuous_action_dim):
         """Build critic ensemble, targets, and optional discrete critic."""
@@ -569,9 +544,6 @@ class FQLPolicy(
             self.critic_ensemble = torch.compile(self.critic_ensemble)
             self.critic_target = torch.compile(self.critic_target)
 
-        # if self.config.num_discrete_actions is not None:
-        #     self._init_discrete_critics()
-
     def _init_actor_bc_flow(self, continuous_action_dim):
         """Initialize policy actor network and default target entropy."""
         # NOTE: The actor select only the continuous action part
@@ -595,8 +567,6 @@ class FQLPolicy(
             dim = self.config.num_discrete_actions if self.config.num_discrete_actions is not None else 0
             self.target_entropy = -np.prod(dim) / 2
 
-        # if self.config.num_discrete_actions is not None:
-        #     self._init_discrete_actor()
 
     def _init_actor_onestep_flow(self, continuous_action_dim):
         """Initialize policy actor network and default target entropy."""
@@ -950,192 +920,6 @@ class CriticEnsemble(nn.Module):
         return q_values
 
 
-# class DiscreteCriticHead(nn.Module):
-#     def __init__(
-#         self,
-#         # encoder: nn.Module,
-#         input_dim: int,
-#         hidden_dims: list[int],
-#         output_dim: int = 3,
-#         activations: Callable[[torch.Tensor], torch.Tensor] | str = nn.GELU(),
-#         activate_final: bool = False,
-#         # dropout_rate: float | None = None,
-#         default_init: float | None = None,
-#         init_final: float | None = None,
-#         final_activation: Callable[[torch.Tensor], torch.Tensor] | str | None = None,
-#         layer_norm: bool = False,
-#     ):
-#         super().__init__()
-#         # self.encoder = encoder
-#         self.output_dim = output_dim
-
-#         self.net = MLP(
-#             input_dim=input_dim,
-#             hidden_dims=hidden_dims,
-#             activations=activations,
-#             activate_final=activate_final,
-#             # dropout_rate=dropout_rate,
-#             final_activation=final_activation,
-#             layer_norm=layer_norm,
-#             default_init=default_init,
-#         )
-
-#         self.output_layer = nn.Linear(in_features=hidden_dims[-1], out_features=self.output_dim)
-#         if init_final is not None:
-#             nn.init.uniform_(self.output_layer.weight, -init_final, init_final)
-#             nn.init.uniform_(self.output_layer.bias, -init_final, init_final)
-#         else:
-#             orthogonal_init()(self.output_layer.weight)
-#             # nn.init.zeros_(self.output_layer.bias)
-
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         # device = get_device_from_parameters(self)
-#         # observations = {k: v.to(device) for k, v in observations.items()}
-#         # obs_enc = self.encoder(observations, cache=observation_features)
-#         return self.output_layer(self.net(x))
-
-
-# class DiscreteCriticEnsemble(nn.Module):
-#     """
-#     CriticEnsemble wraps multiple CriticHead modules into an ensemble.
-
-#     Args:
-#         encoder (SACObservationEncoder): encoder for observations.
-#         ensemble (List[CriticHead]): list of critic heads.
-#         output_normalization (nn.Module): normalization layer for actions.
-#         init_final (float | None): optional initializer scale for final layers.
-
-#     Forward returns a tensor of shape (num_critics, batch_size) containing Q-values.
-#     """
-
-#     def __init__(
-#         self,
-#         encoder: SACObservationEncoder,
-#         ensemble: list[CriticHead],
-#         # output_normalization: nn.Module,
-#         init_final: float | None = None,
-#     ):
-#         super().__init__()
-#         self.encoder = encoder
-#         self.init_final = init_final
-#         # self.output_normalization = output_normalization
-#         self.critics = nn.ModuleList(ensemble)
-
-#     def forward(
-#         self,
-#         observations: dict[str, torch.Tensor],
-#         observation_features: torch.Tensor | None = None,
-#     ) -> torch.Tensor:
-#         device = get_device_from_parameters(self)
-#         # Move each tensor in observations to device
-#         observations = {k: v.to(device) for k, v in observations.items()}
-#         # NOTE: We normalize actions it helps for sample efficiency
-#         # actions: dict[str, torch.tensor] = {"action": actions}
-#         # NOTE: Normalization layer took dict in input and outputs a dict that why
-#         # actions = self.output_normalization(actions)["action"]
-#         # actions = actions.to(device)
-
-#         obs_enc = self.encoder(observations, cache=observation_features)
-
-#         # inputs = torch.cat([obs_enc, actions], dim=-1)
-
-#         # Loop through critics and collect outputs
-#         q_values = []
-#         for critic in self.critics:
-#             q_values.append(critic(obs_enc))
-
-#         # Stack outputs to match expected shape [num_critics, batch_size]
-#         q_values = torch.stack([q.squeeze(-1) for q in q_values], dim=0)
-#         return q_values
-
-
-# class Policy(nn.Module):
-#     def __init__(
-#         self,
-#         encoder: SACObservationEncoder,
-#         network: nn.Module,
-#         action_dim: int,
-#         std_min: float = -5,
-#         std_max: float = 2,
-#         fixed_std: torch.Tensor | None = None,
-#         init_final: float | None = None,
-#         use_tanh_squash: bool = False,
-#         encoder_is_shared: bool = False,
-#     ):
-#         super().__init__()
-#         self.encoder: SACObservationEncoder = encoder
-#         self.network = network
-#         self.action_dim = action_dim
-#         self.std_min = std_min
-#         self.std_max = std_max
-#         self.fixed_std = fixed_std
-#         self.use_tanh_squash = use_tanh_squash
-#         self.encoder_is_shared = encoder_is_shared
-
-#         # Find the last Linear layer's output dimension
-#         for layer in reversed(network.net):
-#             if isinstance(layer, nn.Linear):
-#                 out_features = layer.out_features
-#                 break
-#         # Mean layer
-#         self.mean_layer = nn.Linear(out_features, action_dim)
-#         if init_final is not None:
-#             nn.init.uniform_(self.mean_layer.weight, -init_final, init_final)
-#             nn.init.uniform_(self.mean_layer.bias, -init_final, init_final)
-#         else:
-#             orthogonal_init()(self.mean_layer.weight)
-
-#         # Standard deviation layer or parameter
-#         if fixed_std is None:
-#             self.std_layer = nn.Linear(out_features, action_dim)
-#             if init_final is not None:
-#                 nn.init.uniform_(self.std_layer.weight, -init_final, init_final)
-#                 nn.init.uniform_(self.std_layer.bias, -init_final, init_final)
-#             else:
-#                 orthogonal_init()(self.std_layer.weight)
-
-#     def forward(
-#         self,
-#         observations: torch.Tensor,
-#         observation_features: torch.Tensor | None = None,
-#     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-#         # We detach the encoder if it is shared to avoid backprop through it
-#         # This is important to avoid the encoder to be updated through the policy
-#         obs_enc = self.encoder(observations, cache=observation_features, detach=self.encoder_is_shared)
-
-#         # Get network outputs
-#         outputs = self.network(obs_enc)
-#         means = self.mean_layer(outputs)
-
-#         # Compute standard deviations
-#         if self.fixed_std is None:
-#             log_std = self.std_layer(outputs)
-#             std = torch.exp(log_std)  # Match JAX "exp"
-#             std = torch.clamp(std, self.std_min, self.std_max)  # Match JAX default clip
-#         else:
-#             std = self.fixed_std.expand_as(means)
-
-#         # Build transformed distribution
-#         dist = TanhMultivariateNormalDiag(loc=means, scale_diag=std)
-
-#         # Sample actions (reparameterized)
-#         actions = dist.rsample()
-
-#         # Compute log_probs
-#         log_probs = dist.log_prob(actions)
-
-#         return actions, log_probs, means
-
-#     def get_features(self, observations: torch.Tensor) -> torch.Tensor:
-#         """Get encoded features from observations"""
-#         device = get_device_from_parameters(self)
-#         observations = observations.to(device)
-#         if self.encoder is not None:
-#             with torch.inference_mode():
-#                 return self.encoder(observations)
-#         return observations
-
-
 class ActorVectorFieldPolicy(nn.Module):
     """
     Actor vector field network for flow matching.
@@ -1203,100 +987,6 @@ class ActorVectorFieldPolicy(nn.Module):
         # Get network outputs
         outputs = self.output_layer(self.network(x))
         return outputs, None, None  # Return None for log_probs and means as they are not used in this context
-
-
-# class ActorVectorFieldWithDiscretePolicy(nn.Module):
-#     """
-#     Actor vector field network for flow matching.
-
-#     Args:
-#         hidden_dims (list[int]): Hidden layer dimensions.
-#         action_dim (int): Action dimension.
-#         layer_norm (bool): Whether to apply layer normalization.
-#         encoder (nn.Module, optional): Optional encoder module to encode the inputs.
-#     """
-
-#     def __init__(
-#         self,
-#         encoder: SACObservationEncoder,
-#         network: nn.Module,
-#         action_dim: int,
-#         num_discrete_actions: int,
-#         init_final: float | None = None,
-#         encoder_is_shared: bool = False,
-#     ):
-#         super().__init__()
-#         self.encoder: SACObservationEncoder = encoder
-#         self.network = network
-#         self.action_dim = action_dim
-#         self.num_discrete_actions = num_discrete_actions
-#         self.encoder_is_shared = encoder_is_shared
-#         self.embed = nn.Embedding(3, 3)
-
-#         # Find the last Linear layer's output dimension
-#         for layer in reversed(network.net):
-#             if isinstance(layer, nn.Linear):
-#                 out_features = layer.out_features
-#                 break
-
-#         self.output_layer = nn.Linear(out_features, action_dim)
-#         if init_final is not None:
-#             nn.init.uniform_(self.output_layer.weight, -init_final, init_final)
-#             nn.init.uniform_(self.output_layer.bias, -init_final, init_final)
-#         else:
-#             orthogonal_init()(self.output_layer.weight)
-#             # nn.init.zeros_(self.output_layer.bias)
-
-#     def forward(
-#         self,
-#         observations: torch.Tensor,
-#         observation_features: torch.Tensor | None,
-#         actions: torch.Tensor,
-#         times: torch.Tensor = None,
-#         # is_encoded: bool = False,
-#     ) -> torch.Tensor:
-#         """
-#         Return the vectors at the given states, actions, and times (optional).
-
-#         Args:
-#             observations (Tensor): Observations.
-#             actions (Tensor): Actions.
-#             times (Tensor, optional): Times.
-#             is_encoded (bool): Whether the observations are already encoded.
-#         """
-#         # if not is_encoded and self.encoder is not None:
-#         #     observations = self.encoder(observations, cache=observation_features, detach=self.encoder_is_shared)
-#         obs_enc = self.encoder(observations, cache=observation_features, detach=self.encoder_is_shared)
-#         inputs = [obs_enc, actions]
-#         # inputs = [obs_enc, actions[:,:30], self.embed(actions[:, 30:].long()).flatten(1,2)]
-#         if times is not None:
-#             inputs.append(times)
-#         x = torch.cat(inputs, dim=-1)
-
-#         # Get network outputs
-#         outputs = self.output_layer(self.network(x))
-
-#         continuous_outputs = outputs[:, :-self.num_discrete_actions]
-
-#         discrete_outputs = outputs[:, -self.num_discrete_actions:]
-
-#         discrete_outputs = discrete_outputs.reshape(discrete_outputs.shape[0], -1, 3)
-
-#         policy_dist = Categorical(logits=discrete_outputs)
-#         discrete_action = policy_dist.sample()
-#         # Action probabilities for calculating the adapted soft-Q loss
-#         # discrete_action_probs = policy_dist.probs
-#         discrete_action_probs = F.softmax(discrete_outputs, dim=1)
-#         # discrete_action_probs = torch.clamp(discrete_action_probs, min=1e-6, max=1.0)
-#         discrete_log_prob = F.log_softmax(discrete_outputs, dim=1)
-#         # discrete_log_prob = torch.clamp(discrete_log_prob, min=-10, max=0)
-
-#         discrete_action = discrete_action.reshape(discrete_outputs.shape[0], -1)
-#         discrete_log_prob = discrete_log_prob.reshape(discrete_outputs.shape[0], -1)
-#         discrete_action_probs = discrete_action_probs.reshape(discrete_outputs.shape[0], -1)
-#         discrete_outputs = discrete_outputs.reshape(discrete_outputs.shape[0], -1)
-
-#         return continuous_outputs, None, None, discrete_action, discrete_log_prob, discrete_action_probs, discrete_outputs
 
 
 class DefaultImageEncoder(nn.Module):

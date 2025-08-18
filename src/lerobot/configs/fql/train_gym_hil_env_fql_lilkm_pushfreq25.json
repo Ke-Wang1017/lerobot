@@ -19,7 +19,7 @@
         "use_imagenet_stats": false
     },
     "policy": {
-        "type": "fqlvla",
+        "type": "fql",
         "push_to_hub": false,
         "n_obs_steps": 1,
         "normalization_mapping": {
@@ -149,6 +149,8 @@
         "freeze_vision_encoder": true,
         "image_encoder_hidden_dim": 32,
         "shared_encoder": true,
+        "do_offline_learning": true,
+        "offline_steps": 40000,
         "online_steps": 100000,
         "online_env_seed": 10000,
         "online_buffer_capacity": 20000,
