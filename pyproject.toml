@@ -278,6 +278,16 @@ lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
 lerobot-setup-can="lerobot.scripts.lerobot_setup_can:main"
 
 # ---------------- Tool Configurations ----------------
+[tool.uv]
+dev-dependencies = [
+    "gym-hil>=0.1.13,<0.2.0",
+    "fastapi>=0.115.0,<1.0.0",
+    "uvicorn>=0.30.0,<1.0.0",
+]
+
+[tool.uv.sources]
+gym-hil = { path = "../gym-hil", editable = true }
+
 [tool.setuptools.package-data]
 lerobot = ["envs/*.json"]
 "lerobot.gui" = ["static/*.html", "static/*.css", "static/*.js"]

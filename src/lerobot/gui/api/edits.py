@@ -275,10 +275,26 @@ async def _apply_edits_locked(dataset_id: str):
     original_root = Path(dataset.root)
     applied = 0
     errors = []
+    applied_edit_ids: set[int] = set()
 
     # Sort edits: apply trims first (they modify in place), then deletes
     trim_edits = [e for e in edits if e.edit_type == "trim"]
     delete_edits = sorted([e for e in edits if e.edit_type == "delete"], key=lambda e: e.episode_index, reverse=True)
+
+    # Pre-flight: would deletes wipe out the entire dataset? Reject early so
+    # the user keeps their pending edits and can adjust their selection.
+    if delete_edits and len(delete_edits) >= dataset.meta.total_episodes:
+        errors.append(
+            f"Cannot delete all {dataset.meta.total_episodes} episodes — "
+            "at least one episode must remain. Unmark one before saving."
+        )
+        return {
+            "status": "partial",
+            "message": errors[0],
+            "applied": 0,
+            "errors": errors,
+            "warnings": [],
+        }
 
     # Apply trims (these modify in-place)
     for edit in trim_edits:
@@ -304,6 +320,7 @@ async def _apply_edits_locked(dataset_id: str):
             # Reload metadata to see changes
             dataset.meta.episodes = load_episodes(original_root)
             applied += 1
+            applied_edit_ids.add(id(edit))
             logger.info(f"Applied trim to episode {edit.episode_index}: keeping frames {start_frame}-{end_frame - 1}")
         except Exception as e:
             errors.append(f"Trim episode {edit.episode_index}: {e}")
@@ -328,6 +345,7 @@ async def _apply_edits_locked(dataset_id: str):
             logger.info(f"Deleted episodes {episode_indices} (virtual - no video re-encoding)")
 
             applied += len(delete_edits)
+            applied_edit_ids.update(id(e) for e in delete_edits)
         except Exception as e:
             errors.append(f"Delete episodes: {e}")
             logger.exception("Failed to delete episodes")
@@ -341,11 +359,16 @@ async def _apply_edits_locked(dataset_id: str):
             logger.exception(f"Failed to re-aggregate stats: {e}")
             errors.append(f"Stats re-aggregation failed: {e}")
 
-    # Clear applied edits (both in memory and on disk)
-    from lerobot.gui.state import clear_edits_file
+    # Clear only applied edits — keep failed ones pending so the user can
+    # adjust and retry without re-marking everything from scratch.
+    from lerobot.gui.state import save_edits_to_file
 
-    _app_state.clear_edits(dataset_id)
-    clear_edits_file(original_root)
+    remaining_edits = [e for e in edits if id(e) not in applied_edit_ids]
+    _app_state.pending_edits = (
+        [e for e in _app_state.pending_edits if e.dataset_id != dataset_id]
+        + remaining_edits
+    )
+    save_edits_to_file(original_root, remaining_edits)
 
     # Invalidate all dataset-scoped caches. Edits change episode lengths,
     # so the cumulative-sum cache (_episode_start_indices) must also be

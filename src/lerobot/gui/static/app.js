@@ -1267,6 +1267,9 @@ async function applyEdits() {
             }
 
             setStatus(data.message);
+            if (data.errors && data.errors.length > 0) {
+                alert('Some edits could not be applied:\n\n' + data.errors.join('\n\n'));
+            }
         } else {
             throw new Error(data.message);
         }

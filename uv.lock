@@ -1740,7 +1740,7 @@ wheels = [
 [[package]]
 name = "gym-hil"
 version = "0.1.13"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../gym-hil" }
 dependencies = [
     { name = "gymnasium" },
     { name = "hidapi" },
@@ -1749,10 +1749,21 @@ dependencies = [
     { name = "pygame" },
     { name = "pynput" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f3/41/e89c87b3c66fb2f8ab5818bff4aa552977911eabaee7c12a8a336dcc406f/gym_hil-0.1.13.tar.gz", hash = "sha256:b9eab7a0acc811f181254e3ad72865830fdbb292c236895f374135d3d62f1b27", size = 5668001, upload-time = "2025-10-21T09:57:24.01Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c2/8d/9e3ab53f9aac7bd542f339efd0a9283fa76e034474987e0705379274dfcf/gym_hil-0.1.13-py3-none-any.whl", hash = "sha256:b6444fc43ce1a68ce403df14f99100d9c903ae05d822959e9cd0b76a50b93320", size = 5750805, upload-time = "2025-10-21T09:57:22.068Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "debugpy", marker = "extra == 'dev'", specifier = ">=1.8.1" },
+    { name = "gymnasium", specifier = ">=0.29.1,<2.0.0" },
+    { name = "hidapi", specifier = ">=0.14.0" },
+    { name = "imageio", extras = ["ffmpeg"], specifier = ">=2.34.0" },
+    { name = "mujoco", specifier = ">=2.3.7,<4.0.0" },
+    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7.0" },
+    { name = "pygame", specifier = ">=2.5.1" },
+    { name = "pynput", specifier = ">=1.7.7" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.1.0" },
+    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=5.0.0" },
 ]
+provides-extras = ["dev", "test"]
 
 [[package]]
 name = "gym-pusht"
@@ -2990,6 +3001,13 @@ xvla = [
     { name = "transformers" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "fastapi" },
+    { name = "gym-hil" },
+    { name = "uvicorn" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "accelerate", marker = "extra == 'smolvla'", specifier = ">=1.7.0,<2.0.0" },
@@ -3014,7 +3032,7 @@ requires-dist = [
     { name = "grpcio", marker = "extra == 'grpcio-dep'", specifier = "==1.73.1" },
     { name = "grpcio-tools", marker = "extra == 'dev'", specifier = "==1.73.1" },
     { name = "gym-aloha", marker = "extra == 'aloha'", specifier = ">=0.1.2,<0.2.0" },
-    { name = "gym-hil", marker = "extra == 'hilserl'", specifier = ">=0.1.13,<0.2.0" },
+    { name = "gym-hil", marker = "extra == 'hilserl'", editable = "../gym-hil" },
     { name = "gym-pusht", marker = "extra == 'pusht'", specifier = ">=0.1.5,<0.2.0" },
     { name = "gymnasium", specifier = ">=1.1.1,<2.0.0" },
     { name = "hebi-py", marker = "extra == 'phone'", specifier = ">=2.8.0,<2.12.0" },
@@ -3175,6 +3193,13 @@ requires-dist = [
     { name = "wandb", marker = "extra == 'training'", specifier = ">=0.24.0,<0.25.0" },
 ]
 provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "transformers-dep", "grpcio-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "gamepad", "hopejr", "lekiwi", "unitree-g1", "reachy2", "kinematics", "intelrealsense", "phone", "diffusion", "wallx", "pi", "smolvla", "multi-task-dit", "groot", "sarm", "xvla", "hilserl", "async", "peft", "gui", "dev", "notebook", "test", "video-benchmark", "aloha", "pusht", "libero", "metaworld", "all"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "fastapi", specifier = ">=0.115.0,<1.0.0" },
+    { name = "gym-hil", editable = "../gym-hil" },
+    { name = "uvicorn", specifier = ">=0.30.0,<1.0.0" },
+]
 
 [[package]]
 name = "librt"
