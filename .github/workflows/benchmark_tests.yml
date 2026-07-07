@@ -65,6 +65,8 @@ jobs:
   # ── LIBERO ────────────────────────────────────────────────────────────────
   # Isolated image: lerobot[libero] only (hf-libero, dm-control, mujoco chain)
   libero-integration-test:
+    # Skip on forks: needs HF tokens + AWS GPU runner only available upstream.
+    if: github.repository == 'huggingface/lerobot'
     name: Libero — build image + 1-episode eval
     runs-on:
       group: aws-g6-4xlarge-plus
@@ -223,6 +225,8 @@ jobs:
   # ── METAWORLD ─────────────────────────────────────────────────────────────
   # Isolated image: lerobot[metaworld] only (metaworld==3.0.0, mujoco>=3 chain)
   metaworld-integration-test:
+    # Skip on forks: needs HF tokens + AWS GPU runner only available upstream.
+    if: github.repository == 'huggingface/lerobot'
     name: MetaWorld — build image + 1-episode eval
     runs-on:
       group: aws-g6-4xlarge-plus

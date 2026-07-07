@@ -61,6 +61,11 @@ jobs:
   # Each tier installs a different extra and runs the full suite;
   # tests gated behind other extras skip automatically.
   fast-pytest-tests:
+    # Skip on forks: this job requires HF Hub tokens (LEROBOT_HF_USER) and
+    # cached datasets that only exist on the upstream repo. On a fork it
+    # will always fail with auth/network errors and add noise to every push.
+    # Re-enable manually via the Actions tab → Run workflow if needed.
+    if: github.repository == 'huggingface/lerobot'
     name: Fast Pytest Tests
     runs-on: ubuntu-latest
     env:

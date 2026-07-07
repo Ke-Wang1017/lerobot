@@ -53,10 +53,14 @@ jobs:
   full-tests:
     name: Full Tests
     runs-on: ubuntu-latest
+    # Skip on forks: needs HF tokens, GPU host, and the internal Docker
+    # image only published from the upstream repo's docker_publish workflow.
     if: |
-      (github.event_name == 'pull_request_review' && github.event.review.state == 'approved') ||
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch'
+      github.repository == 'huggingface/lerobot' && (
+        (github.event_name == 'pull_request_review' && github.event.review.state == 'approved') ||
+        github.event_name == 'push' ||
+        github.event_name == 'workflow_dispatch'
+      )
     env:
       MUJOCO_GL: egl
       HF_HOME: /mnt/cache/.cache/huggingface

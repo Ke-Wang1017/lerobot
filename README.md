@@ -4,143 +4,224 @@
 
 <div align="center">
 
-[![Tests](https://github.com/huggingface/lerobot/actions/workflows/latest_deps_tests.yml/badge.svg?branch=main)](https://github.com/huggingface/lerobot/actions/workflows/latest_deps_tests.yml?query=branch%3Amain)
-[![Tests](https://github.com/huggingface/lerobot/actions/workflows/docker_publish.yml/badge.svg?branch=main)](https://github.com/huggingface/lerobot/actions/workflows/docker_publish.yml?query=branch%3Amain)
 [![Python versions](https://img.shields.io/pypi/pyversions/lerobot)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/huggingface/lerobot/blob/main/LICENSE)
-[![Status](https://img.shields.io/pypi/status/lerobot)](https://pypi.org/project/lerobot/)
-[![Version](https://img.shields.io/pypi/v/lerobot)](https://pypi.org/project/lerobot/)
-[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-v2.1-ff69b4.svg)](https://github.com/huggingface/lerobot/blob/main/CODE_OF_CONDUCT.md)
-[![Discord](https://img.shields.io/badge/Discord-Join_Us-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/q8Dzzpym3f)
+[![Based on](https://img.shields.io/badge/fork%20of-huggingface%2Flerobot-yellow)](https://github.com/huggingface/lerobot)
 
 </div>
 
-**LeRobot** aims to provide models, datasets, and tools for real-world robotics in PyTorch. The goal is to lower the barrier to entry so that everyone can contribute to and benefit from shared datasets and pretrained models.
+<!-- <h3 align="center">Lerobot Studio</h3> -->
 
-🤗 A hardware-agnostic, Python-native interface that standardizes control across diverse platforms, from low-cost arms (SO-100) to humanoids.
+This repository tracks Hugging Face [LeRobot](https://github.com/huggingface/lerobot)
+and adds three things on top of it:
 
-🤗 A standardized, scalable LeRobotDataset format (Parquet + MP4 or images) hosted on the Hugging Face Hub, enabling efficient storage, streaming and visualization of massive robotic datasets.
+1. **A browser GUI** for reviewing, editing, and recording robot datasets — and
+   for launching training runs, including on ephemeral cloud GPUs.
+2. **An MCP server** so any AI tool you already use (Claude Code, Codex, Cursor,
+   Claude Desktop, …) can browse your datasets, leave durable comments, and drive
+   the GUI — using _your_ AI subscription, no extra API key.
+3. **New policies** — a hierarchical dual-system VLA (**HVLA**) and online RL
+   fine-tuning via an **RL Token** (**RLT**).
 
-🤗 State-of-the-art policies that have been shown to transfer to the real-world ready for training and deployment.
-
-🤗 Comprehensive support for the open-source ecosystem to democratize physical AI.
-
-## Quick Start
-
-LeRobot can be installed directly from PyPI.
-
-```bash
-pip install lerobot
-lerobot-info
-```
-
-> [!IMPORTANT]
-> For detailed installation guide, please see the [Installation Documentation](https://huggingface.co/docs/lerobot/installation).
-
-## Robots & Control
-
-<div align="center">
-  <img src="./media/readme/robots_control_video.webp" width="640px" alt="Reachy 2 Demo">
-</div>
-
-LeRobot provides a unified `Robot` class interface that decouples control logic from hardware specifics. It supports a wide range of robots and teleoperation devices.
-
-```python
-from lerobot.robots.myrobot import MyRobot
-
-# Connect to a robot
-robot = MyRobot(config=...)
-robot.connect()
-
-# Read observation and send action
-obs = robot.get_observation()
-action = model.select_action(obs)
-robot.send_action(action)
-```
-
-**Supported Hardware:** SO100, LeKiwi, Koch, HopeJR, OMX, EarthRover, Reachy2, Gamepads, Keyboards, Phones, OpenARM, Unitree G1, reBot B601.
-
-While these devices are natively integrated into the LeRobot codebase, the library is designed to be extensible. You can easily implement the Robot interface to utilize LeRobot's data collection, training, and visualization tools for your own custom robot.
-
-For detailed hardware setup guides, see the [Hardware Documentation](https://huggingface.co/docs/lerobot/integrate_hardware).
-
-## LeRobot Dataset
-
-To solve the data fragmentation problem in robotics, we utilize the **LeRobotDataset** format.
-
-- **Structure:** Synchronized MP4 videos (or images) for vision and Parquet files for state/action data.
-- **HF Hub Integration:** Explore thousands of robotics datasets on the [Hugging Face Hub](https://huggingface.co/lerobot).
-- **Tools:** Seamlessly delete episodes, split by indices/fractions, add/remove features, and merge multiple datasets.
-
-```python
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
-# Load a dataset from the Hub
-dataset = LeRobotDataset("lerobot/aloha_mobile_cabinet")
-
-# Access data (automatically handles video decoding)
-episode_index=0
-print(f"{dataset[episode_index]['action'].shape=}\n")
-```
-
-Learn more about it in the [LeRobotDataset Documentation](https://huggingface.co/docs/lerobot/lerobot-dataset-v3)
-
-## SoTA Models
-
-LeRobot implements state-of-the-art policies in pure PyTorch, covering Imitation Learning, Reinforcement Learning, Vision-Language-Action (VLA) models, World Models, and Reward Models, with more coming soon. It also provides you with the tools to instrument and inspect your training process.
+Everything upstream LeRobot does — `LeRobotDataset`, the policy zoo, hardware
+drivers, `lerobot-train` / `lerobot-record` / `lerobot-teleoperate` — still works
+exactly as documented. This README focuses on what's _different_. For the core
+library, see the [upstream documentation](https://huggingface.co/docs/lerobot/index).
 
 <p align="center">
-  <img alt="Gr00t Architecture" src="./media/readme/VLA_architecture.jpg" width="640px">
+  <img alt="Features walkthrough" src="./media/readme/intro.gif" width="80%">
+  <br/>
+  <sub><i>▶ Features walkthrough</i></sub>
 </p>
 
-Training a policy is as simple as running a script configuration:
+<p align="center">
+  <i>📺 More walkthroughs:</i>
+  <a href="https://media.githubusercontent.com/media/TheWisp/lerobot/d4cceff59d41dfa0d64621088d48cfdb55e60a0e/demo/assets/training_dashboard.mp4">live training dashboard</a>
+</p>
+
+---
+
+## Key additions over upstream
+
+| Area                         | What's new                                                                                                                                                                 | Where                                                                      |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| **GUI**                      | Browser tool to play / trim / delete / record dataset episodes, manage robot profiles, and launch training. LAN-discoverable via mDNS (`lerobot.local`).                   | [`src/lerobot/gui`](src/lerobot/gui/README.md)                             |
+| **MCP / AI-native**          | Bring-your-own-AI-tool control over LeRobot via the Model Context Protocol. Scoped bearer tokens, a shared comment sidecar, and bridge tools that steer your open GUI tab. | [`src/lerobot/mcp`](src/lerobot/mcp/README.md)                             |
+| **HVLA policy**              | Dual-system VLA: a slow VLM (S2) supplies scene understanding; a fast action policy (S1) generates action chunks conditioned on S2's latent.                               | [`src/lerobot/policies/hvla`](src/lerobot/policies/hvla/README.md)         |
+| **RLT**                      | Online RL fine-tuning of a _frozen_ HVLA S1 policy using a lightweight TD3 actor-critic over a learned "RL token".                                                         | [`src/lerobot/policies/hvla/rlt`](src/lerobot/policies/hvla/rlt/README.md) |
+| **Ephemeral cloud training** | Launch a training run on an auto-managed cloud GPU (Nebius) from the GUI; the VM is torn down on completion with a hard TTL backstop.                                      | [`src/lerobot/gui/training`](src/lerobot/gui/training)                     |
+
+Also extended: higher-rate bimanual SO-107 teleop with predictive control, Quest VR
+and scripted end-effector teleoperators, Cartesian IK, and latency instrumentation.
+
+---
+
+## Installation
+
+This fork installs from source (it carries extra dependencies — GUI, MCP, cloud —
+behind optional extras) and uses [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
-lerobot-train \
-  --policy.type=act \
-  --dataset.repo_id=lerobot/aloha_mobile_cabinet
+git clone https://github.com/TheWisp/lerobot.git
+cd lerobot
+
+uv sync --extra gui --extra mcp        # GUI + AI-native server
+# add --extra nebius                    for ephemeral cloud training
+# add --extra dataset                   for video decoding in the MCP tools
+# uv sync --extra all                   for everything
 ```
 
-| Category                   | Models                                                                                                                                                                                                                                                                                                                                                                                     |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Imitation Learning**     | [ACT](./docs/source/policy_act_README.md), [Diffusion](./docs/source/policy_diffusion_README.md), [VQ-BeT](./docs/source/policy_vqbet_README.md), [Multitask DiT Policy](./docs/source/policy_multi_task_dit_README.md)                                                                                                                                                                    |
-| **Reinforcement Learning** | [HIL-SERL](./docs/source/hilserl.mdx), [TDMPC](./docs/source/policy_tdmpc_README.md) & QC-FQL (coming soon)                                                                                                                                                                                                                                                                                |
-| **VLAs Models**            | [Pi0](./docs/source/pi0.mdx), [Pi0Fast](./docs/source/pi0fast.mdx), [Pi0.5](./docs/source/pi05.mdx), [GR00T N1.7](./docs/source/policy_groot_README.md), [SmolVLA](./docs/source/policy_smolvla_README.md), [XVLA](./docs/source/xvla.mdx), [EO-1](./docs/source/eo1.mdx), [MolmoAct2](./docs/source/molmoact2.mdx), [WALL-OSS](./docs/source/walloss.mdx), [EVO1](./docs/source/evo1.mdx) |
-| **World Models**           | [VLA-JEPA](./docs/source/vla_jepa.mdx), [LingBot-VA](./docs/source/lingbot_va.mdx), [FastWAM](./docs/source/fastwam.mdx)                                                                                                                                                                                                                                                                   |
-| **Reward Models**          | [SARM](./docs/source/sarm.mdx), [TOPReward](./docs/source/topreward.mdx), [Robometer](./docs/source/robometer.mdx)                                                                                                                                                                                                                                                                         |
+Run any LeRobot command through `uv run` (e.g. `uv run lerobot-info`).
 
-Similarly to the hardware, you can easily implement your own policy & leverage LeRobot's data collection, training, and visualization tools, and share your model to the HF Hub
+---
 
-For detailed policy setup guides, see the [Policy Documentation](https://huggingface.co/docs/lerobot/bring_your_own_policies). For GPU/RAM requirements and expected training time per policy, see the [Compute Hardware Guide](https://huggingface.co/docs/lerobot/hardware_guide).
+## The GUI
 
-## Inference & Evaluation
-
-Evaluate your policies in simulation or on real hardware using the unified evaluation script. LeRobot supports standard benchmarks like **LIBERO**, **MetaWorld** and more to come.
+A browser-based tool for reviewing and editing robot training datasets, managing
+robot/teleop profiles, and launching training.
 
 ```bash
-# Evaluate a policy on the LIBERO benchmark
-lerobot-eval \
-  --policy.path=lerobot/pi0_libero_finetuned \
-  --env.type=libero \
-  --env.task=libero_object \
-  --eval.n_episodes=10
+uv run lerobot-gui --port 8000
 ```
 
-Learn how to implement your own simulation environment or benchmark and distribute it from the HF Hub by following the [EnvHub Documentation](https://huggingface.co/docs/lerobot/envhub)
+Open <http://127.0.0.1:8000/>, enter a Hub repo ID (e.g. `lerobot/pusht`) or a
+local dataset path, then:
 
-## Resources
+- **Play** episodes across all cameras with timeline scrubbing
+- **Trim** episodes to keep only the useful frames (→ save)
+- **Label** episodes with tags or reward / quality columns
+- **Record** new episodes by teleoperation
+- **Train** policies locally or on cloud GPUs
+- **Run** a trained policy on the robot
 
-- **[Documentation](https://huggingface.co/docs/lerobot/index):** The complete guide to tutorials & API.
-- **[Chinese Tutorials: LeRobot+SO-ARM101中文教程-同济子豪兄](https://zihao-ai.feishu.cn/wiki/space/7589642043471924447)** Detailed doc for assembling, teleoperate, dataset, train, deploy. Verified by Seed Studio and 5 global hackathon players.
-- **[Discord](https://discord.gg/q8Dzzpym3f):** Join the `LeRobot` server to discuss with the community.
-- **[X](https://x.com/LeRobotHF):** Follow us on X to stay up-to-date with the latest developments.
-- **[Robot Learning Tutorial](https://huggingface.co/spaces/lerobot/robot-learning-tutorial):** A free, hands-on course to learn robot learning using LeRobot.
-- **[T-Shirt Folding Experiment](https://huggingface.co/spaces/lerobot/robot-folding):** An end-to-end demonstration of folding t-shirts with LeRobot.
-- **[LeLab](https://github.com/huggingface/leLab):** A web interface for LeRobot — teleoperate, calibrate, record datasets, replay, and train your SO arm from the browser, no CLI required.
+<p align="center">
+  <img alt="Record then replay an episode from the GUI" src="./media/readme/record_replay.gif" width="70%">
+</p>
+
+### Open it from another device
+
+Bind to the network and the GUI advertises itself over mDNS, so a laptop, tablet,
+or phone on the same LAN can reach it without knowing the host's IP:
+
+```bash
+uv run lerobot-gui --host 0.0.0.0
+```
+
+```
+LeRobot host service ready:
+  mDNS (no IP needed): http://lerobot.local:8000/
+  LAN:                 http://192.168.1.61:8000/
+  Local:               http://localhost:8000/
+```
+
+> [!WARNING]
+> Binding to the network has no authentication — anyone on the LAN with the URL
+> can drive your robot. Fine for a lab/home network; not for untrusted WiFi.
+
+Full details, keyboard shortcuts, and caveats: **[GUI README](src/lerobot/gui/README.md)**.
+
+---
+
+## AI-native control (MCP)
+
+Connect the AI tool you already use to LeRobot via the
+[Model Context Protocol](https://modelcontextprotocol.io). The AI browses your
+datasets, leaves comments that survive across sessions and tools, and drives the
+GUI tab you have open — all powered by **your** existing AI subscription. No
+separate API key, no "LeRobot AI account".
+
+The GUI serves the MCP endpoint at `/mcp` on the same port. Each user issues a
+scoped token from `lerobot.local/ai_setup` and pastes the one-line command the
+page generates for their tool (Claude Code, Codex, Cursor, Gemini, Claude Desktop).
+Then, from your AI tool:
+
+> _"What lerobot datasets do I have? Show me the last frame of episodes 0–9 of
+> `<dataset>`, tag the ones that look successful, and open the first failure in my
+> GUI."_
+
+Tokens carry one of four nested scopes — `read` ⊂ `comment` ⊂ `edit` ⊂ `operate`
+— so you grant exactly as much authority (up to and including starting hardware
+runs) as the situation warrants. The full setup walkthrough, tool surface, scope
+model, and design rationale are in the **[MCP README](src/lerobot/mcp/README.md)**.
+
+<p align="center">
+  <img alt="End-to-end MCP demo: an AI tool driving LeRobot" src="./src/lerobot/mcp/docs/demo_e2e.gif" width="80%">
+</p>
+
+---
+
+## Policies
+
+### HVLA — Hierarchical VLA
+
+A dual-system VLA for bimanual control, inspired by
+[Helix](https://www.figure.ai/news/helix),
+[OpenHelix](https://arxiv.org/abs/2505.03912), and
+[Dual Process VLA](https://arxiv.org/abs/2410.15549).
+
+```
+S2 (slow, ~4–15 Hz)            shared memory          S1 (fast, ~22–30 Hz)
+ 4 cams → SigLIP                ┌──────────┐           2–4 cams → DINOv2/ResNet
+ task text → Gemma 2B  ──latent→│ [2048]   │←─ read ── state + latent + age
+ mean-pool → [2048]             │ + age(s) │           → ACT / flow-matching
+ (VLM, no action expert)        └──────────┘           → action chunk (14-DOF)
+```
+
+S2 (a VLM) provides scene understanding at low rate; S1 generates action chunks at
+high rate conditioned on S2's latent plus a learned _age_ embedding that accounts
+for how stale the latent is. S1 can also run standalone (`--zero-s2`).
+See the **[HVLA README](src/lerobot/policies/hvla/README.md)**.
+
+### RLT — RL Token for online fine-tuning
+
+Online RL fine-tuning of a **frozen** HVLA S1 policy using a lightweight actor-critic,
+based on [Xu et al., "RL Token"](https://pi.website/research/rlt). An RL-token encoder
+compresses S1's observation context into a single bottleneck vector; a TD3 actor refines
+S1's reference action chunk while a BC regularizer keeps it close to S1's output. Only
+the actor and critic (~2M params) train. See the
+**[RLT README](src/lerobot/policies/hvla/rlt/README.md)**.
+
+<p align="center">
+  <img alt="RLT online fine-tuning dashboard in the GUI" src="./media/readme/rlt_dashboard.png" width="80%">
+</p>
+
+The full upstream policy zoo (ACT, Diffusion, π0 / π0.5, SmolVLA, TDMPC, VQ-BeT,
+SAC, …) is intact under [`src/lerobot/policies`](src/lerobot/policies).
+
+---
+
+## Ephemeral cloud training
+
+From the GUI's training tab you can launch a run on an auto-managed cloud GPU
+(Nebius) instead of local hardware. The provider spins up a VM with the training
+image, streams logs and live metrics to the dashboard, pulls the trained
+checkpoint back to your machine, and tears the VM down when the run reaches a
+terminal state — with a cloud-init `poweroff` timer as a hard-TTL backstop so a
+forgotten run can't bill indefinitely. Credentials are a single server-held
+service-account key, configured once via the Nebius-connection form. See
+[`src/lerobot/gui/training`](src/lerobot/gui/training).
+
+<p align="center">
+  <img alt="An ephemeral cloud-training run in the GUI: live loss/LR charts and the checkpoint pulled back from the VM" src="./media/readme/cloud_training.png" width="80%">
+  <br>
+  <sub><i>A cloud run's dashboard — live metrics and the retrieved checkpoint, after the VM is gone.</i></sub>
+</p>
+
+---
+
+## Relationship to upstream
+
+This is a fork of [huggingface/lerobot](https://github.com/huggingface/lerobot)
+and periodically tracks it. The core library — dataset format, training/eval
+scripts, policy base classes, hardware abstraction — is upstream's; the GUI, MCP
+server, HVLA/RLT policies, and cloud-training path are additions here. For
+installing the base library, the dataset format, and the standard tutorials,
+follow the [upstream docs](https://huggingface.co/docs/lerobot/index).
 
 ## Citation
 
-If you use LeRobot in your project, please cite the GitHub repository to acknowledge the ongoing development and contributors:
+This fork builds directly on Hugging Face LeRobot — please cite the upstream
+project:
 
 ```bibtex
 @misc{cadene2024lerobot,
@@ -150,8 +231,6 @@ If you use LeRobot in your project, please cite the GitHub repository to acknowl
     year = {2024}
 }
 ```
-
-If you are referencing our research or the academic paper, please also cite our ICLR publication:
 
 <details>
 <summary><b>ICLR 2026 Paper</b></summary>
@@ -168,14 +247,19 @@ If you are referencing our research or the academic paper, please also cite our 
 
 </details>
 
+The HVLA and RLT policies draw on Helix / OpenHelix / Dual-Process VLA and
+[Xu et al., "RL Token"](https://pi.website/research/rlt) respectively — see each
+policy's README for the specific references.
+
 ## Contribute
 
-We welcome contributions from everyone in the community! To get started, please read our [CONTRIBUTING.md](https://github.com/huggingface/lerobot/blob/main/CONTRIBUTING.md) guide. Whether you're adding a new feature, improving documentation, or fixing a bug, your help and feedback are invaluable. We're incredibly excited about the future of open-source robotics and can't wait to work with you on what's next—thank you for your support!
-
-<p align="center">
-  <img alt="SO101 Video" src="./media/readme/so100_video.webp" width="640px">
-</p>
+Contributions to the upstream library are welcome via
+[huggingface/lerobot](https://github.com/huggingface/lerobot); see its
+[CONTRIBUTING.md](https://github.com/huggingface/lerobot/blob/main/CONTRIBUTING.md).
+For the additions in this fork (GUI, MCP, HVLA/RLT), the relevant READMEs above
+include contributor notes — the MCP README in particular documents how to add a
+new tool, scope it, and prove it works.
 
 <div align="center">
-<sub>Built by the <a href="https://huggingface.co/lerobot">LeRobot</a> team at <a href="https://huggingface.co">Hugging Face</a> with ❤️</sub>
+<sub>Core library built by the <a href="https://huggingface.co/lerobot">LeRobot</a> team at <a href="https://huggingface.co">Hugging Face</a> with ❤️</sub>
 </div>
