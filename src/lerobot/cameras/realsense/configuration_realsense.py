@@ -61,6 +61,11 @@ class RealSenseCameraConfig(CameraConfig):
     use_depth: bool = False
     rotation: Cv2Rotation = Cv2Rotation.NO_ROTATION
     warmup_s: int = 1
+    # RealSense depth post-processing filters (only apply when use_depth=True)
+    enable_decimation: bool = True  # Reduce resolution for faster processing
+    enable_spatial: bool = True  # Smooth depth based on neighboring pixels
+    enable_temporal: bool = True  # Smooth depth across frames
+    enable_hole_filling: bool = True  # Fill in missing depth values
 
     def __post_init__(self) -> None:
         self.color_mode = ColorMode(self.color_mode)

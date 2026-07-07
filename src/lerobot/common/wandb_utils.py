@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import functools
 import logging
 import os
 import re
@@ -24,6 +25,22 @@ from termcolor import colored
 
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.utils.constants import PRETRAINED_MODEL_DIR
+
+
+def handle_wandb_errors(func):
+    """Decorator to catch and log wandb errors without breaking the pipeline."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            error_msg = f"WandB logging failed in {func.__name__}: {e}"
+            logging.error(colored(f"{'=' * 80}\n{error_msg}\n{'=' * 80}", "red", attrs=["bold"]))
+            print(colored(f"\nWARNING: {error_msg}", "red", attrs=["bold"]))
+            print(colored("Training will continue, but this operation was not logged to WandB.\n", "yellow"))
+
+    return wrapper
 
 
 def cfg_to_group(
@@ -122,6 +139,7 @@ class WandBLogger:
         logging.info(f"Track this run --> {colored(wandb.run.get_url(), 'yellow', attrs=['bold'])}")
         self._wandb = wandb
 
+    @handle_wandb_errors
     def log_policy(self, checkpoint_dir: Path):
         """Checkpoints the policy to wandb."""
         if self.cfg.disable_artifact:
@@ -159,6 +177,7 @@ class WandBLogger:
 
         self._wandb.log_artifact(artifact)
 
+    @handle_wandb_errors
     def log_dict(
         self, d: dict, step: int | None = None, mode: str = "train", custom_step_key: str | None = None
     ):
@@ -201,6 +220,7 @@ class WandBLogger:
             else:
                 self._wandb.log(data=batch_data, step=step)
 
+    @handle_wandb_errors
     def log_video(self, video_path: str, step: int, mode: str = "train"):
         if mode not in {"train", "eval"}:
             raise ValueError(mode)

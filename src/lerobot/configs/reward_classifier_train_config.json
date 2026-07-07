@@ -1,0 +1,54 @@
+{
+    "dataset": {
+        "repo_id": "thewisp/hil_serl_move_cube",
+        "root": null
+    },
+    "policy": {
+        "type": "reward_classifier",
+        "model_name": "helper2424/resnet10",
+        "model_type": "cnn",
+        "num_cameras": 2,
+        "num_classes": 2,
+        "hidden_dim": 256,
+        "dropout_rate": 0.1,
+        "learning_rate": 1e-4,
+        "device": "cuda",
+        "use_amp": true,
+        "input_features": {
+            "observation.images.top": {
+                "type": "VISUAL",
+                "shape": [
+                    3,
+                    128,
+                    128
+                ]
+            },
+            "observation.images.wrist": {
+                "type": "VISUAL",
+                "shape": [
+                    3,
+                    128,
+                    128
+                ]
+            }
+        }
+    },
+    "batch_size": 16,
+    "num_workers": 4,
+    "steps": 5000,
+    "log_freq": 10,
+    "eval_freq": 1000,
+    "save_freq": 1000,
+    "save_checkpoint": true,
+    "seed": 2,
+    "resume": false,
+    "optimizer": {
+        "grad_clip_norm": 10.0
+    },
+    "wandb": {
+        "enable": false,
+        "project": "reward-classifier",
+        "disable_artifact": true
+    },
+    "job_name": "reward-classifier"
+}

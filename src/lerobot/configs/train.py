@@ -207,6 +207,8 @@ class TrainPipelineConfig(HubMixin):
             policy_dir = self.checkpoint_path / PRETRAINED_MODEL_DIR
 
         if self.policy is not None:
+            # Always update pretrained_path to checkpoint for loading
+            # For PEFT, we'll preserve the base model path separately
             self.policy.pretrained_path = policy_dir
         if self.reward_model is not None:
             self.reward_model.pretrained_path = str(policy_dir)

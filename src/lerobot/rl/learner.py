@@ -625,6 +625,7 @@ def save_training_checkpoint(
     # We want to control this with the keyboard inputs
     dataset_dir = os.path.join(cfg.output_dir, "dataset")
     if os.path.exists(dataset_dir) and os.path.isdir(dataset_dir):
+        # safe-destruct: RL replay buffer scratch dir under cfg.output_dir
         shutil.rmtree(dataset_dir)
 
     # Save dataset
@@ -636,6 +637,7 @@ def save_training_checkpoint(
     if offline_replay_buffer is not None:
         dataset_offline_dir = os.path.join(cfg.output_dir, "dataset_offline")
         if os.path.exists(dataset_offline_dir) and os.path.isdir(dataset_offline_dir):
+            # safe-destruct: RL offline replay buffer scratch dir under cfg.output_dir
             shutil.rmtree(dataset_offline_dir)
 
         offline_replay_buffer.to_lerobot_dataset(

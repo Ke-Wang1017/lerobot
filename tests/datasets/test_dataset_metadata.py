@@ -194,6 +194,30 @@ def test_create_raises_on_existing_directory(tmp_path):
         )
 
 
+def test_per_episode_hint_round_trips(tmp_path):
+    """A feature with per_episode=True preserves the hint in info.json on disk."""
+    root = tmp_path / "per_ep_ds"
+    features = {
+        **SIMPLE_FEATURES,
+        "reward": {"dtype": "float32", "shape": (1,), "names": None},
+        "success": {"dtype": "int8", "shape": (1,), "names": None, "per_episode": True},
+    }
+    LeRobotDatasetMetadata.create(
+        repo_id="test/per_episode_roundtrip",
+        fps=DEFAULT_FPS,
+        features=features,
+        robot_type=DUMMY_ROBOT_TYPE,
+        root=root,
+        use_videos=False,
+    )
+
+    # Verify the hint is on disk in info.json (the source of truth on reload).
+    with open(root / INFO_PATH) as f:
+        info_on_disk = json.load(f)
+    assert info_on_disk["features"]["success"].get("per_episode") is True
+    assert "per_episode" not in info_on_disk["features"]["reward"]
+
+
 def test_init_loads_existing_metadata(tmp_path, lerobot_dataset_metadata_factory, info_factory):
     """When metadata files exist on disk, __init__ loads them correctly."""
     root = tmp_path / "load_test"

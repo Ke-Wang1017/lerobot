@@ -93,6 +93,7 @@ from lerobot.utils.random_utils import set_seed
 from lerobot.utils.utils import (
     init_logging,
     inside_slurm,
+    setup_run_logging,
 )
 
 
@@ -724,6 +725,11 @@ def _compile_episode_data(
 
 @parser.wrap()
 def eval_main(cfg: EvalPipelineConfig):
+    # init_logging in main() set up bare stderr logging so draccus parse
+    # errors are visible; once we have cfg.output_dir we re-init with a
+    # per-run log file + excepthook so crashes (rollout / GPU OOM /
+    # prefetch-thread failures) land in the eval output dir.
+    setup_run_logging(cfg.output_dir, "eval")
     logging.info(pformat(asdict(cfg)))
 
     # Check device is available
@@ -1012,24 +1018,32 @@ def eval_policy_all(
 
     if max_parallel_tasks <= 1:
         prefetch_thread: threading.Thread | None = None
-        for i, (task_group, task_id, env) in enumerate(tasks):
+        try:
+            for i, (task_group, task_id, env) in enumerate(tasks):
+                if prefetch_thread is not None:
+                    prefetch_thread.join()
+                    prefetch_thread = None
+
+                try:
+                    tg, tid, metrics = task_runner(task_group, task_id, env)
+                    _accumulate_to(tg, metrics)
+                    per_task_infos.append({"task_group": tg, "task_id": tid, "metrics": metrics})
+                finally:
+                    env.close()
+                    # Prefetch next task's workers *after* closing current env to prevent
+                    # GPU memory overlap between consecutive tasks.
+                    if i + 1 < len(tasks):
+                        next_env = tasks[i + 1][2]
+                        if hasattr(next_env, "_ensure"):
+                            prefetch_thread = threading.Thread(target=next_env._ensure, daemon=True)
+                            prefetch_thread.start()
+        finally:
+            # Ensure the last-started prefetch thread is joined even when the
+            # loop exits via an exception. Without this an aborted eval would
+            # leave a daemon thread tying up GPU prefetch workers until the
+            # interpreter shuts down.
             if prefetch_thread is not None:
                 prefetch_thread.join()
-                prefetch_thread = None
-
-            try:
-                tg, tid, metrics = task_runner(task_group, task_id, env)
-                _accumulate_to(tg, metrics)
-                per_task_infos.append({"task_group": tg, "task_id": tid, "metrics": metrics})
-            finally:
-                env.close()
-                # Prefetch next task's workers *after* closing current env to prevent
-                # GPU memory overlap between consecutive tasks.
-                if i + 1 < len(tasks):
-                    next_env = tasks[i + 1][2]
-                    if hasattr(next_env, "_ensure"):
-                        prefetch_thread = threading.Thread(target=next_env._ensure, daemon=True)
-                        prefetch_thread.start()
     else:
         with cf.ThreadPoolExecutor(max_workers=max_parallel_tasks) as executor:
             fut2meta = {}

@@ -58,7 +58,15 @@ def init_rerun(
     os.environ["RERUN_FLUSH_NUM_BYTES"] = batch_size
     rr.init(session_name)
     memory_limit = os.getenv("LEROBOT_RERUN_MEMORY_LIMIT", "10%")
-    if ip and port:
+
+    # LEROBOT_RERUN_SERVE_PORT: host a gRPC server on this port instead of
+    # connecting to an external one.  Used by the GUI so the web viewer can
+    # pull data directly from this process (connect_grpc to an external
+    # rerun --serve-web drops images in the web viewer — Rerun 0.26 bug).
+    serve_port = os.environ.get("LEROBOT_RERUN_SERVE_PORT")
+    if serve_port:
+        rr.serve_grpc(grpc_port=int(serve_port), server_memory_limit=memory_limit)
+    elif ip and port:
         rr.connect_grpc(url=f"rerun+http://{ip}:{port}/proxy")
     else:
         rr.spawn(memory_limit=memory_limit)

@@ -21,6 +21,7 @@ import platform
 import select
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from copy import copy, deepcopy
@@ -61,14 +62,24 @@ def init_logging(
         accelerator: Optional Accelerator instance (for multi-GPU detection)
     """
 
-    def custom_format(record: logging.LogRecord) -> str:
-        dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        fnameline = f"{record.pathname}:{record.lineno}"
-        pid_str = f"[PID: {os.getpid()}] " if display_pid else ""
-        return f"{record.levelname} {pid_str}{dt} {fnameline[-15:]:>15} {record.getMessage()}"
+    class _LeRobotFormatter(logging.Formatter):
+        def format(self, record: logging.LogRecord) -> str:
+            dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            fnameline = f"{record.pathname}:{record.lineno}"
+            pid_str = f"[PID: {os.getpid()}] " if display_pid else ""
+            msg = f"{record.levelname} {pid_str}{dt} {fnameline[-15:]:>15} {record.getMessage()}"
+            # Preserve tracebacks attached via ``logging.exception(...)`` or
+            # ``logging.error(..., exc_info=...)``. The previous formatter
+            # silently dropped them.
+            if record.exc_info and not record.exc_text:
+                record.exc_text = self.formatException(record.exc_info)
+            if record.exc_text:
+                msg = msg + ("\n" if not msg.endswith("\n") else "") + record.exc_text
+            if record.stack_info:
+                msg = msg + ("\n" if not msg.endswith("\n") else "") + self.formatStack(record.stack_info)
+            return msg
 
-    formatter = logging.Formatter()
-    formatter.format = custom_format
+    formatter = _LeRobotFormatter()
 
     logger = logging.getLogger()
     logger.setLevel(logging.NOTSET)
@@ -97,6 +108,53 @@ def init_logging(
         logger.addHandler(file_handler)
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+def _install_exception_logging() -> None:
+    """Route uncaught exceptions (main + background threads) through
+    ``logging.error`` so the per-run log file captures full tracebacks.
+
+    Without this, ``Exception in thread …`` and the final ``Traceback``
+    go to stderr only and disappear from any post-mortem.
+    """
+
+    def _main_hook(exc_type, exc_value, exc_tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+        logging.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
+
+    def _thread_hook(args: threading.ExceptHookArgs) -> None:
+        if issubclass(args.exc_type, SystemExit):
+            return
+        name = args.thread.name if args.thread is not None else "<unknown>"
+        logging.error(
+            "Uncaught exception in thread %s",
+            name,
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    sys.excepthook = _main_hook
+    threading.excepthook = _thread_hook
+
+
+def setup_run_logging(output_dir: str | Path, run_name: str) -> Path:
+    """Initialise per-run file logging + uncaught-exception hooks.
+
+    Creates ``<output_dir>/<run_name>_<YYYYMMDD_HHMMSS>.log``, wires it
+    up via :func:`init_logging`, and installs main-thread and thread-pool
+    excepthooks so crashes land in the log file (not just stderr).
+
+    Returns the resolved log-file path so callers can surface it to the
+    user. Safe to call once per script entry point.
+    """
+    log_dir = Path(output_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"{run_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    init_logging(log_file=log_file)
+    _install_exception_logging()
+    logging.info("Log file: %s", log_file)
+    return log_file
 
 
 def format_big_number(num, precision=0):

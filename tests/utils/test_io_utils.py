@@ -88,3 +88,55 @@ def test_list_length_mismatch_raises(tmp_json_file):
     obj = {"nums": [0, 0]}
     with pytest.raises(ValueError):
         deserialize_json_into_object(json_path, obj)
+
+
+# ── write_json atomic-write behaviour ───────────────────────────────────────
+
+
+from lerobot.utils.io_utils import write_json  # noqa: E402
+
+
+def test_write_json_round_trips(tmp_path: Path):
+    """Happy path: data written via write_json can be read back."""
+    p = tmp_path / "out.json"
+    payload = {"a": 1, "nested": {"b": [1, 2, 3]}}
+    write_json(payload, p)
+    assert json.loads(p.read_text()) == payload
+
+
+def test_write_json_creates_parent_dirs(tmp_path: Path):
+    p = tmp_path / "nested" / "dir" / "out.json"
+    write_json({"x": 1}, p)
+    assert p.exists()
+    assert p.parent.is_dir()
+
+
+def test_write_json_preserves_previous_file_on_serialization_failure(tmp_path: Path):
+    """The atomic-write contract: if `json.dump` raises mid-write, the
+    destination file must still hold its previous content — not a half-
+    written file the next reader would reject with JSONDecodeError.
+    """
+    p = tmp_path / "stats.json"
+    # Seed with valid content
+    write_json({"good": True}, p)
+    original_text = p.read_text()
+
+    # Try to write an unserializable payload — set() isn't JSON-encodable.
+    unserializable = {"bad": {1, 2, 3}}
+    with pytest.raises(TypeError):
+        write_json(unserializable, p)
+
+    # Destination still holds the original content; no garbage was committed.
+    assert p.read_text() == original_text
+    # And the .tmp sibling was cleaned up; no stale staging file is left
+    # behind to confuse a later observer.
+    assert list(tmp_path.iterdir()) == [p]
+
+
+def test_write_json_does_not_leave_tmp_sibling_on_success(tmp_path: Path):
+    """The `.tmp` staging file must be renamed away on success, not left behind."""
+    p = tmp_path / "out.json"
+    write_json({"k": "v"}, p)
+    # No `.tmp` sibling should remain.
+    siblings = list(tmp_path.iterdir())
+    assert siblings == [p], siblings

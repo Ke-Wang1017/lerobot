@@ -126,6 +126,7 @@ _zmq_available = is_package_available("pyzmq", import_name="zmq")
 _hebi_available = is_package_available("hebi-py", import_name="hebi")
 _teleop_available = is_package_available("teleop")
 _placo_available = is_package_available("placo")
+_pin_pink_available = is_package_available("pin-pink", import_name="pink")
 _hidapi_available = is_package_available("hidapi", import_name="hid")
 
 # Data / serialization

@@ -30,6 +30,9 @@ repos:
     hooks:
       - id: check-added-large-files
         args: ['--maxkb=1024']
+        # Vendored third-party browser libs (three.js, urdf-loader) ship as
+        # single large bundles — see static/vendor/PROVENANCE.md.
+        exclude: ^src/lerobot/gui/static/vendor/
       - id: debug-statements
       - id: check-merge-conflict
       - id: check-case-conflict
@@ -50,6 +53,8 @@ repos:
     hooks:
       - id: typos
         args: [--force-exclude]
+        # Vendored third-party browser libs — not our source to spell-check.
+        exclude: ^src/lerobot/gui/static/vendor/
 
   - repo: https://github.com/asottile/pyupgrade
     rev: v3.21.0
@@ -87,14 +92,29 @@ repos:
       args: ["-c", "pyproject.toml"]
       additional_dependencies: ["bandit[toml]"]
 
+  ##### Local: destructive-op annotations #####
+  - repo: local
+    hooks:
+      - id: no-silent-destruct
+        name: Flag destructive filesystem ops without justification
+        entry: scripts/lint/no_silent_destruct.py
+        language: python
+        files: ^(src|scripts)/.*\.py$
+        pass_filenames: true
+
   # TODO(Steven): Uncomment when ready to use
   ##### Static Analysis & Typing #####
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.19.1
     hooks:
       - id: mypy
-        args: [--config-file=pyproject.toml]
-        exclude: ^(examples|benchmarks|tests)/
+        # Run on the full project so mypy can resolve cross-file types (parent
+        # Camera class, etc.). pass_filenames: true splits the staged set across
+        # multiple invocations and breaks import resolution. We pass src/lerobot
+        # explicitly because pass_filenames: false otherwise leaves mypy with no
+        # target argument.
+        args: [--config-file=pyproject.toml, src/lerobot]
+        pass_filenames: false
 
   ##### Docstring Checks #####
   # - repo: https://github.com/akaihola/darglint2

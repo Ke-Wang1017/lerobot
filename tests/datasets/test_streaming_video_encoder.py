@@ -515,9 +515,11 @@ class TestStreamingEncoderIntegration:
             root=tmp_path / "no_streaming_test",
             use_videos=True,
             streaming_encoding=False,
+            use_per_camera_streaming=False,
         )
 
         assert dataset.writer._streaming_encoder is None
+        assert not dataset.writer.video_encoders
 
         num_frames = 5
         for _ in range(num_frames):

@@ -89,6 +89,8 @@ from lerobot.robots import (  # noqa: F401
     RobotConfig,
     bi_openarm_follower,
     bi_rebot_b601_follower,
+    bi_so107_follower,
+    bi_so107_follower_predictive,
     bi_so_follower,
     earthrover_mini_plus,
     hope_jr,
@@ -98,8 +100,11 @@ from lerobot.robots import (  # noqa: F401
     openarm_follower,
     reachy2,
     rebot_b601_follower,
+    so107_follower_predictive,
     so_follower,
+    so_follower_predictive,
     unitree_g1 as unitree_g1_robot,
+    virtual_bi_so107,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -107,6 +112,8 @@ from lerobot.teleoperators import (  # noqa: F401
     bi_openarm_leader,
     bi_openarm_mini,
     bi_rebot_102_leader,
+    bi_so107_leader,
+    bi_so107_leader_highrate,
     bi_so_leader,
     gamepad,
     homunculus,
@@ -116,14 +123,21 @@ from lerobot.teleoperators import (  # noqa: F401
     omx_leader,
     openarm_leader,
     openarm_mini,
+    quest_vr,
     reachy2_teleoperator,
     rebot_102_leader,
+    scripted_ee,
+    so107_leader_highrate,
     so_leader,
+    so_leader_highrate,
+    trajectory_replay,
     unitree_g1,
 )
 from lerobot.utils.import_utils import register_third_party_plugins
+from lerobot.utils.latency import LatencySession
+from lerobot.utils.latency.motion import MotionLogger
 from lerobot.utils.robot_utils import precise_sleep
-from lerobot.utils.utils import init_logging, move_cursor_up
+from lerobot.utils.utils import move_cursor_up, setup_run_logging
 from lerobot.utils.visualization_utils import (
     init_visualization,
     log_visualization_data,
@@ -150,6 +164,13 @@ class TeleoperateConfig:
     display_port: int | None = None
     # Whether to display compressed (JPEG) images instead of raw frames
     display_compressed_images: bool = False
+    # Latency monitoring: capture per-stage timing into an in-memory aggregator
+    # and publish a JSON snapshot for the GUI to read.
+    # See src/lerobot/gui/docs/latency_monitoring.md.
+    latency_monitor: bool = False
+    # Where to write latency_snapshot.json (when --latency_monitor=true).
+    # The GUI reads from this fixed location to render the live overlays.
+    latency_output_dir: str = "outputs/teleop"
 
 
 def teleop_loop(
@@ -163,6 +184,9 @@ def teleop_loop(
     display_mode: str = "rerun",
     duration: float | None = None,
     display_compressed_images: bool = False,
+    obs_stream_steps: list | None = None,
+    latency_session: LatencySession | None = None,
+    motion_logger: MotionLogger | None = None,
 ):
     """
     This function continuously reads actions from a teleoperation device, processes them through optional
@@ -181,73 +205,125 @@ def teleop_loop(
         teleop_action_processor: An optional pipeline to process raw actions from the teleoperator.
         robot_action_processor: An optional pipeline to process actions before they are sent to the robot.
         robot_observation_processor: An optional pipeline to process raw observations from the robot.
+        latency_session: Per-loop latency monitoring lifecycle. Pass
+            ``LatencySession.disabled()`` (or omit) for no monitoring; the
+            loop body is identical either way thanks to the no-op session.
     """
 
     display_len = max(len(key) for key in robot.action_features)
+    if latency_session is None:
+        latency_session = LatencySession.disabled()
     start = time.perf_counter()
     while True:
         loop_start = time.perf_counter()
+        with latency_session.iteration():
+            # Get robot observation. We wrap the whole call in a single span:
+            # this includes the follower's motor sync_read AND the (cached,
+            # microseconds-fast) cam.read_latest() per camera. In practice
+            # the span time is dominated by the motor sync_read; finer
+            # breakdown (motor vs. cam consume) is V2.
+            with latency_session.span("get_observation"):
+                obs = robot.get_observation()
 
-        # Get robot observation
-        # Not really needed for now other than for visualization
-        # teleop_action_processor can take None as an observation
-        # given that it is the identity processor as default
-        obs = robot.get_observation()
+            # Per-camera staleness/period — read latest_timestamp from each
+            # camera right after get_observation so we capture what was
+            # just consumed.
+            latency_session.cam_consume_all(getattr(robot, "cameras", None))
 
-        if robot.name == "unitree_g1":
-            teleop.send_feedback(obs)
+            # Run obs processors + stream writer (for GUI live viewer with overlays)
+            with latency_session.span("process_obs"):
+                if obs_stream_steps:
+                    obs_for_stream = obs
+                    for step in obs_stream_steps:
+                        obs_for_stream = step.observation(obs_for_stream)
 
-        # Get teleop action
-        raw_action = teleop.get_action()
+            if robot.name == "unitree_g1":
+                teleop.send_feedback(obs)
 
-        # Process teleop action through pipeline
-        teleop_action = teleop_action_processor((raw_action, obs))
+            with latency_session.span("process_action"):
+                # Get teleop action
+                raw_action = teleop.get_action()
+                # Process teleop action through pipeline
+                teleop_action = teleop_action_processor((raw_action, obs))
+                # Process action for robot through pipeline
+                robot_action_to_send = robot_action_processor((teleop_action, obs))
+                # Chunk-aware path: if the teleop publishes an upcoming
+                # horizon, route the chunk to the robot so chunk-aware
+                # robots (SO107FollowerPredictive et al.) can perform
+                # exact-lookup lookahead at now + L instead of velocity
+                # extrapolation. The processor pipeline is dict-only by
+                # design (its converters validate isinstance(action, dict)),
+                # so chunks bypass it — frames[0] is what the dict path
+                # would have produced for "now" and the controller treats
+                # the chunk's later frames as the authoritative future.
+                # robot_action_to_send (the post-pipeline dict) is still
+                # used for the display block below so per-tick UX is
+                # unaffected.
+                action_to_send = teleop.get_action_with_horizon() or robot_action_to_send
 
-        # Process action for robot through pipeline
-        robot_action_to_send = robot_action_processor((teleop_action, obs))
+            # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
+            with latency_session.span("action_send"):
+                _ = robot.send_action(action_to_send)
 
-        # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
-        _ = robot.send_action(robot_action_to_send)
+            # Per-tick motion logging (intent + state). No-op when disabled.
+            # `raw_action` is the leader pose dict; `obs` is the follower's
+            # state read at the top of the iteration. MotionLogger filters
+            # to .pos keys so non-position obs (cameras) are silently
+            # skipped.
+            if motion_logger is not None:
+                motion_logger.tick(raw_action, obs)
 
-        if display_data:
-            # Process robot observation through pipeline
-            obs_transition = robot_observation_processor(obs)
+            if display_data:
+                log_visualization_data(
+                    display_mode,
+                    observation=robot_observation_processor(obs),
+                    action=teleop_action,
+                    compress_images=display_compressed_images,
+                )
 
-            log_visualization_data(
-                display_mode,
-                observation=obs_transition,
-                action=teleop_action,
-                compress_images=display_compressed_images,
-            )
-
-            print("\n" + "-" * (display_len + 10))
-            print(f"{'NAME':<{display_len}} | {'NORM':>7}")
-            # Display the final robot action that was sent
-            for motor, value in robot_action_to_send.items():
-                print(f"{motor:<{display_len}} | {value:>7.2f}")
-            move_cursor_up(len(robot_action_to_send) + 3)
+                print("\n" + "-" * (display_len + 10))
+                print(f"{'NAME':<{display_len}} | {'NORM':>7}")
+                # Display the final robot action that was sent
+                for motor, value in robot_action_to_send.items():
+                    print(f"{motor:<{display_len}} | {value:>7.2f}")
+                move_cursor_up(len(robot_action_to_send) + 3)
+            # iteration() commits BEFORE precise_sleep so loop_dt_ms reflects
+            # iteration *work* time, not work + sleep. Otherwise overrun
+            # fires every iteration — precise_sleep slightly overshoots
+            # its target by design.
 
         dt_s = time.perf_counter() - loop_start
         precise_sleep(max(1 / fps - dt_s, 0.0))
         loop_s = time.perf_counter() - loop_start
-        print(f"Teleop loop time: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)")
-        move_cursor_up(1)
+
+        if not latency_session.enabled:
+            # Legacy line-rewriting print, only when monitoring is off
+            # (else the 1 Hz INFO log from LatencySession is cleaner UX).
+            print(f"Teleop loop time: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)")
+            move_cursor_up(1)
 
         if duration is not None and time.perf_counter() - start >= duration:
+            return
+        # File-backed teleops (trajectory_replay) flip ``is_exhausted`` once
+        # the recorded duration has elapsed. Treat that as a clean end-of-
+        # session signal, the same as ``duration`` expiring.
+        if getattr(teleop, "is_exhausted", False):
+            logging.info("Teleop exhausted (no more frames) — ending session.")
             return
 
 
 @parser.wrap()
 def teleoperate(cfg: TeleoperateConfig):
-    init_logging()
+    setup_run_logging(cfg.latency_output_dir, "teleop")
     logging.info(pformat(asdict(cfg)))
     if cfg.display_data:
         init_visualization(
             cfg.display_mode, session_name="teleoperation", ip=cfg.display_ip, port=cfg.display_port
         )
+    _is_remote = cfg.display_ip is not None and cfg.display_ip not in ("127.0.0.1", "localhost", "::1")
     display_compressed_images = (
         True
-        if (cfg.display_data and cfg.display_ip is not None and cfg.display_port is not None)
+        if (cfg.display_data and _is_remote and cfg.display_port is not None)
         else cfg.display_compressed_images
     )
 
@@ -255,8 +331,52 @@ def teleoperate(cfg: TeleoperateConfig):
     robot = make_robot_from_config(cfg.robot)
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
+    # Add custom observation processor steps from the robot
+    custom_steps = robot.get_observation_processor_steps()
+    if custom_steps:
+        # Insert custom steps at the beginning of the pipeline
+        robot_observation_processor.steps = custom_steps + robot_observation_processor.steps
+        logging.info(f"Added {len(custom_steps)} custom observation processor step(s) from robot")
+
+    # Build obs stream processor chain: robot processors + stream writer at the end
+    # The stream writer handles both ObservationStream (GUI viewer) and optionally
+    # SharedImageBuffer (S2 debug model) based on env vars.
+    from lerobot.robots.obs_stream import make_obs_stream_writer_step
+
+    obs_stream_steps = list(robot.get_observation_processor_steps() or [])
+    obs_stream_writer = make_obs_stream_writer_step()
+    if obs_stream_writer is not None:
+        obs_stream_steps.append(obs_stream_writer)
+
+    latency_session = LatencySession.from_config(
+        enabled=cfg.latency_monitor,
+        loop_kind="teleop",
+        target_fps=float(cfg.fps),
+        output_dir=cfg.latency_output_dir if cfg.latency_monitor else None,
+    )
+    if latency_session.enabled and latency_session.writer is not None:
+        logging.info("Latency monitoring enabled; snapshots → %s", latency_session.writer.path)
+
+    # Per-tick motion log (intent + state) — same output dir as the latency
+    # snapshot, timestamped filename so back-to-back runs don't clobber.
+    # Gated on latency_monitor so non-monitored runs have zero overhead.
+    motion_logger: MotionLogger | None = None
+    if cfg.latency_monitor:
+        motion_logger = MotionLogger(cfg.latency_output_dir)
+        logging.info("Motion logging enabled; trace → %s", motion_logger.path)
+
     teleop.connect()
     robot.connect()
+
+    # Chunk-aware / predictive robots can poll the teleop directly at
+    # their own control rate (e.g. 200 Hz) instead of waiting for
+    # send_action pushes from the 30 Hz loop. Default Robot.attach_teleop
+    # is a no-op for non-predictive robots, so this is unconditionally
+    # safe to call. The loop's send_action path still runs for dataset
+    # recording — when the teleop is bound, send_action's intent is
+    # ignored by the controller, but the dict return value is still
+    # what the dataset writer records.
+    robot.attach_teleop(teleop)
 
     try:
         teleop_loop(
@@ -270,12 +390,28 @@ def teleoperate(cfg: TeleoperateConfig):
             robot_action_processor=robot_action_processor,
             robot_observation_processor=robot_observation_processor,
             display_compressed_images=display_compressed_images,
+            obs_stream_steps=obs_stream_steps,
+            latency_session=latency_session,
+            motion_logger=motion_logger,
         )
     except KeyboardInterrupt:
         pass
     finally:
+        if motion_logger is not None:
+            motion_logger.close()
         if cfg.display_data:
             shutdown_visualization(cfg.display_mode)
+        # Detach the teleop from the robot BEFORE disconnecting it. On a
+        # chunk-aware / predictive robot, ``attach_teleop`` wires the
+        # 200 Hz controller thread to ``teleop.get_action()``. If we
+        # disconnect the teleop without detaching first, the controller
+        # keeps polling for the ~40 ms it takes the subsequent
+        # ``robot.disconnect()`` to stop the thread — every poll hits a
+        # ``DeviceNotConnectedError`` from the closed teleop bus, logged
+        # as a noisy ERROR per tick. Detaching first makes shutdown
+        # silent. No-op for non-predictive robots (base ``attach_teleop``
+        # is empty).
+        robot.attach_teleop(None)
         teleop.disconnect()
         robot.disconnect()
 

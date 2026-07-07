@@ -31,17 +31,31 @@ from .constants import ACTION, DEFAULT_FEATURES, OBS_ENV_STATE, OBS_STR
 
 
 def _validate_feature_names(features: dict[str, dict]) -> None:
-    """Validate that feature names do not contain invalid characters.
+    """Validate that feature names do not contain invalid characters and that
+    optional flags (e.g. ``per_episode``) are only set on supported feature
+    shapes.
 
     Args:
         features (dict): The LeRobot features dictionary.
 
     Raises:
-        ValueError: If any feature name contains '/'.
+        ValueError: If any feature name contains '/' or carries an invalid
+            ``per_episode`` declaration (e.g. on an image/video/vector feature).
     """
     invalid_features = {name: ft for name, ft in features.items() if "/" in name}
     if invalid_features:
         raise ValueError(f"Feature names should not contain '/'. Found '/' in '{invalid_features}'.")
+
+    # Late import to avoid a circular through datasets.feature_utils → utils.feature_utils.
+    from lerobot.datasets.feature_utils import validate_per_episode_flag
+
+    errors = []
+    for name, ft in features.items():
+        err = validate_per_episode_flag(name, ft)
+        if err:
+            errors.append(err)
+    if errors:
+        raise ValueError("Invalid per_episode declaration:\n" + "".join(errors))
 
 
 def hw_to_dataset_features(

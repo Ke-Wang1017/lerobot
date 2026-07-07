@@ -39,6 +39,17 @@ lerobot-replay \
   --dataset.episode=0
 ```
 
+Example replay with bimanual so107:
+```shell
+lerobot-replay \
+  --robot.type=bi_so107_follower \
+  --robot.left_arm_port=/dev/ttyACM0 \
+  --robot.right_arm_port=/dev/ttyACM1 \
+  --robot.id=bimanual_follower \
+  --dataset.repo_id=${HF_USER}/bimanual-so107-dataset \
+  --dataset.episode=0
+```
+
 """
 
 import logging
@@ -47,6 +58,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from pprint import pformat
 
+from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
+from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
 from lerobot.configs import parser
 from lerobot.datasets import LeRobotDataset
 from lerobot.processor import (
@@ -57,6 +70,8 @@ from lerobot.robots import (  # noqa: F401
     RobotConfig,
     bi_openarm_follower,
     bi_rebot_b601_follower,
+    bi_so107_follower,
+    bi_so107_follower_predictive,
     bi_so_follower,
     earthrover_mini_plus,
     hope_jr,
@@ -66,15 +81,17 @@ from lerobot.robots import (  # noqa: F401
     openarm_follower,
     reachy2,
     rebot_b601_follower,
+    so107_follower_predictive,
     so_follower,
+    so_follower_predictive,
     unitree_g1,
 )
 from lerobot.utils.constants import ACTION
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import (
-    init_logging,
     log_say,
+    setup_run_logging,
 )
 
 
@@ -96,11 +113,15 @@ class ReplayConfig:
     dataset: DatasetReplayConfig
     # Use vocal synthesis to read events.
     play_sounds: bool = True
+    # Where to write the per-run log file. Used as the output_dir for
+    # setup_run_logging so crashes (main thread + background threads) land
+    # in a per-timestamp log file instead of being lost to stderr.
+    log_output_dir: str = "outputs/replay"
 
 
 @parser.wrap()
 def replay(cfg: ReplayConfig):
-    init_logging()
+    setup_run_logging(cfg.log_output_dir, "replay")
     logging.info(pformat(asdict(cfg)))
 
     robot_action_processor = make_default_robot_action_processor()
@@ -109,6 +130,16 @@ def replay(cfg: ReplayConfig):
     dataset = LeRobotDataset(cfg.dataset.repo_id, root=cfg.dataset.root, episodes=[cfg.dataset.episode])
 
     actions = dataset.select_columns(ACTION)
+
+    # Build obs stream processor chain: robot processors + stream writer at the end
+    from lerobot.robots.obs_stream import make_obs_stream_writer_step
+
+    obs_stream_steps = list(
+        robot.get_observation_processor_steps() if hasattr(robot, "get_observation_processor_steps") else []
+    )
+    obs_stream_writer = make_obs_stream_writer_step()
+    if obs_stream_writer is not None:
+        obs_stream_steps.append(obs_stream_writer)
 
     robot.connect()
 
@@ -123,6 +154,10 @@ def replay(cfg: ReplayConfig):
                 action[name] = action_array[i]
 
             robot_obs = robot.get_observation()
+            if obs_stream_steps:
+                obs_for_stream = robot_obs
+                for step in obs_stream_steps:
+                    obs_for_stream = step.observation(obs_for_stream)
 
             processed_action = robot_action_processor((action, robot_obs))
 

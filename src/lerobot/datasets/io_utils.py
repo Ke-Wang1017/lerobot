@@ -13,6 +13,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import contextlib
+import os
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +38,7 @@ from .language import LANGUAGE_COLUMNS
 from .utils import (
     DEFAULT_DATA_FILE_SIZE_IN_MB,
     DEFAULT_EPISODES_PATH,
+    DEFAULT_SUBTASKS_PATH,
     DEFAULT_TASKS_PATH,
     EPISODES_DIR,
     INFO_PATH,
@@ -178,13 +181,33 @@ def load_stats(local_dir: Path) -> dict[str, dict[str, np.ndarray]] | None:
 def write_tasks(tasks: pandas.DataFrame, local_dir: Path) -> None:
     path = local_dir / DEFAULT_TASKS_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    tasks.to_parquet(path)
+    # Atomic write: a crash mid-`to_parquet` would leave a truncated
+    # tasks.parquet that read_parquet refuses to open, blocking every
+    # subsequent dataset load until the user manually restores from
+    # backup. Stage to a sibling .tmp and rename onto the destination.
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tasks.to_parquet(tmp)
+        os.replace(tmp, path)
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            # safe-destruct: our own .tmp staging file; destination is untouched
+            tmp.unlink()
+        raise
 
 
 def load_tasks(local_dir: Path) -> pandas.DataFrame:
     tasks = pd.read_parquet(local_dir / DEFAULT_TASKS_PATH)
     tasks.index.name = "task"
     return tasks
+
+
+def load_subtasks(local_dir: Path) -> pandas.DataFrame | None:
+    """Load subtasks from subtasks.parquet if it exists."""
+    subtasks_path = local_dir / DEFAULT_SUBTASKS_PATH
+    if subtasks_path.exists():
+        return pd.read_parquet(subtasks_path)
+    return None
 
 
 def write_episodes(episodes: Dataset, local_dir: Path) -> None:
@@ -206,7 +229,17 @@ def write_episodes(episodes: Dataset, local_dir: Path) -> None:
 
     fpath = local_dir / DEFAULT_EPISODES_PATH.format(chunk_index=0, file_index=0)
     fpath.parent.mkdir(parents=True, exist_ok=True)
-    episodes.to_parquet(fpath)
+    # Atomic write — same rationale as write_tasks. A torn write of
+    # episodes parquet leaves the dataset un-loadable.
+    tmp = fpath.with_suffix(fpath.suffix + ".tmp")
+    try:
+        episodes.to_parquet(tmp)
+        os.replace(tmp, fpath)
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            # safe-destruct: our own .tmp staging file; destination is untouched
+            tmp.unlink()
+        raise
 
 
 def load_episodes(local_dir: Path) -> datasets.Dataset:

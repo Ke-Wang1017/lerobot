@@ -174,6 +174,94 @@ def update_policy(
     return train_metrics, output_dict
 
 
+def get_default_peft_configuration(policy_type):
+    """Build a basic PEFT configuration for the given policy type assuming that we train a policy from a checkpoint."""
+
+    common_projections = "state_proj|action_in_proj|action_out_proj|action_time_mlp_in|action_time_mlp_out"
+
+    if policy_type == "smolvla":
+        return {
+            "target_modules": rf"(model\.vlm_with_expert\.lm_expert\..*\.(q|v)_proj|model\.({common_projections}))",
+            "modules_to_save": [],
+        }
+    elif policy_type in ("pi0", "pi05"):
+        return {
+            "target_modules": rf"(.*\.gemma_expert\..*\.self_attn.(q|v)_proj|model\.({common_projections}))",
+            "modules_to_save": [],
+        }
+
+    return {"modules_to_save": None}
+
+
+def wrap_policy_in_peft_model(cfg, policy):
+    from peft import PEFT_TYPE_TO_CONFIG_MAPPING, PeftType, get_peft_model
+
+    # Disable all gradients because we'll only train the parameters selected by the PEFT method.
+    # Layers that should receive gradients anyway need to be listed in `modules_to_save`.
+    for p in policy.parameters():
+        p.requires_grad_(False)
+
+    if not cfg.policy.pretrained_path:
+        raise ValueError(
+            "Training from scratch using PEFT. This is unlikely to yield good results. "
+            "Supply a `policy.path` to fine-tune an existing model."
+        )
+
+    if cfg.policy.type == "smolvla" and not cfg.policy.load_vlm_weights:
+        logging.warning(
+            "Training SmolVLA from scratch using PEFT. This is unlikely to yield good results. Set "
+            "`load_vlm_weights=True` to fine-tune the existing policy."
+        )
+
+    peft_config_policy = get_default_peft_configuration(cfg.policy.type)
+    peft_config_cli = dataclasses.asdict(cfg.peft) if cfg.peft else {}
+    peft_config_cli["modules_to_save"] = peft_config_cli["full_training_modules"]  # compatibility with PEFT
+    peft_method_type = PeftType[peft_config_cli["method_type"].upper()]
+    peft_config_cls = PEFT_TYPE_TO_CONFIG_MAPPING[peft_method_type]
+
+    # Handle specific CLI overrides
+    for key in ["target_modules", "modules_to_save", "r", "lora_alpha"]:
+        if peft_config_cli[key] is not None:
+            peft_config_policy[key] = peft_config_cli[key]
+
+    if "target_modules" not in peft_config_policy:
+        raise ValueError(
+            f"There is no default `target_modules` value for policy {cfg.policy.type}. Please pass it manually."
+        )
+
+    # Init method depends on the used PEFT method, your specific PEFT method
+    # might not be considered here, in that case an error is raised.
+    if peft_config_cli["init_type"] is not None:
+        if peft_method_type == "LORA":
+            peft_config_policy["init_lora_weights"] = peft_config_cli["init_type"]
+        elif peft_method_type == "MISS":
+            peft_config_policy["init_weights"] = peft_config_cli["init_type"]
+        else:
+            raise ValueError(
+                f"Init type {peft_config_cli['init_type']} unknown for PEFT method {peft_method_type}."
+            )
+
+    # PEFT uses this attribute to set adapter_config.base_name_or_path which we use for loading the
+    # correct base model in `make_policy` since in a PEFT loading setting we only get the path to the
+    # adapter, not the base model.
+    # Note: This function is only called for NEW PEFT training (not resume), so we always use
+    # pretrained_path directly as the base model path
+    if policy.config.pretrained_path:
+        policy.name_or_path = str(policy.config.pretrained_path)
+
+    # Finally wrap the policy in a PEFT model
+    policy = get_peft_model(
+        policy,
+        peft_config_cls(**peft_config_policy),
+    )
+
+    # Make sure that the config is tagged as using PEFT so that the loading code can take the
+    # appropriate steps to use the adapter weights and the PEFT config instead of the full model weights.
+    policy.config.use_peft = True
+
+    return policy
+
+
 @parser.wrap()
 def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     """
@@ -296,17 +384,74 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             rename_map=cfg.rename_map,
         )
 
-    if cfg.peft is not None:
+    # Check if PEFT is involved at all (either new or resumed). cfg.policy is None
+    # during reward-model training, so guard the use_peft access.
+    is_peft = cfg.peft is not None or (cfg.policy is not None and cfg.policy.use_peft)
+
+    if is_peft:
         if cfg.is_reward_model_training:
             raise ValueError("PEFT is only supported for policy training. ")
         from peft import PeftModel
 
-        if isinstance(policy, PeftModel):
-            logging.info("PEFT adapter already loaded from checkpoint, skipping wrap_with_peft.")
+        if cfg.resume or isinstance(policy, PeftModel):
+            # Resuming PEFT training: model is already loaded with adapters
+            # Ensure adapter parameters are trainable (may have been saved as frozen)
+            logging.info("Resuming PEFT training. Ensuring adapter parameters are trainable.")
+            policy.train()  # Set model to training mode
+            # Explicitly enable gradients on adapter parameters
+            for name, param in policy.named_parameters():
+                if "lora" in name.lower() or "adapter" in name.lower():
+                    param.requires_grad = True
         else:
+            # New PEFT training: wrap the policy with PEFT adapters
             logging.info("Using PEFT! Wrapping model.")
-            peft_cli_overrides = dataclasses.asdict(cfg.peft)
-            policy = policy.wrap_with_peft(peft_cli_overrides=peft_cli_overrides)
+            policy = wrap_policy_in_peft_model(cfg, policy)
+    else:
+        # Non-PEFT: Apply selective parameter freezing for Pi0.5 to reduce VRAM usage on single GPU
+        if cfg.policy is not None and cfg.policy.type == "pi05":
+            # Freeze language and leave these unfrozen to reduce VRAM usage
+            for name, param in policy.named_parameters():
+                param.requires_grad = (
+                    "gemma_expert" in name
+                    or "vision_tower" in name
+                    or "multi_modal" in name
+                    or "action_in_proj" in name
+                    or "action_out_proj" in name
+                    or "time_mlp_in" in name
+                    or "time_mlp_out" in name
+                )
+
+            # Log which parameters will be trained and frozen
+            logging.info("Parameter freezing summary:")
+            trainable_params = []
+            frozen_params = []
+            trainable_count = 0
+            frozen_count = 0
+            trainable_numel = 0
+            frozen_numel = 0
+
+            for name, param in policy.named_parameters():
+                if param.requires_grad:
+                    trainable_params.append((name, param.numel()))
+                    trainable_count += 1
+                    trainable_numel += param.numel()
+                else:
+                    frozen_params.append((name, param.numel()))
+                    frozen_count += 1
+                    frozen_numel += param.numel()
+
+            logging.info(f"\nTrainable parameters ({trainable_count} groups, {trainable_numel:,} params):")
+            for name, numel in trainable_params:
+                logging.info(f"  ✓ {name}: {numel:,} params")
+
+            logging.info(f"\nFrozen parameters ({frozen_count} groups, {frozen_numel:,} params):")
+            for name, numel in frozen_params:
+                logging.info(f"  ✗ {name}: {numel:,} params")
+
+            total_params = trainable_numel + frozen_numel
+            logging.info(
+                f"\nTotal: {trainable_count}/{trainable_count + frozen_count} groups trainable, {trainable_numel:,}/{total_params:,} params trainable ({100 * trainable_numel / total_params:.1f}%)"
+            )
 
     # Wait for all processes to finish model creation before continuing
     accelerator.wait_for_everyone()
@@ -666,10 +811,12 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                 )
                 update_last_checkpoint(checkpoint_dir)
                 if cfg.save_checkpoint_to_hub:
+                    # active_cfg = cfg.trainable_config (policy or reward model); cfg.policy
+                    # is None during reward-model training, so derive repo_id/private from it.
                     push_checkpoint_to_hub(
                         checkpoint_dir,
-                        cfg.policy.repo_id,
-                        private=cfg.policy.private,
+                        active_cfg.repo_id,
+                        private=getattr(active_cfg, "private", False),
                     )
                 if wandb_logger:
                     wandb_logger.log_policy(checkpoint_dir)

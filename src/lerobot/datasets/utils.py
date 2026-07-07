@@ -18,6 +18,8 @@ import dataclasses
 import importlib.resources
 import json
 import logging
+from collections import deque
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -90,6 +92,7 @@ CHUNK_FILE_PATTERN = "chunk-{chunk_index:03d}/file-{file_index:03d}"
 IMAGE_FILE_PATTERN = "frame-{frame_index:06d}.png"
 DEPTH_FILE_PATTERN = "frame-{frame_index:06d}.tiff"
 DEFAULT_TASKS_PATH = "meta/tasks.parquet"
+DEFAULT_SUBTASKS_PATH = "meta/subtasks.parquet"
 DEFAULT_EPISODES_PATH = EPISODES_DIR + "/" + CHUNK_FILE_PATTERN + ".parquet"
 DEFAULT_DATA_PATH = DATA_DIR + "/" + CHUNK_FILE_PATTERN + ".parquet"
 DEFAULT_VIDEO_PATH = VIDEO_DIR + "/{video_key}/" + CHUNK_FILE_PATTERN + ".mp4"
@@ -490,3 +493,102 @@ def safe_shard(dataset: datasets.IterableDataset, index: int, num_shards: int) -
     shard_idx = min(dataset.num_shards, index + 1) - 1
 
     return dataset.shard(num_shards, index=shard_idx)
+
+
+# --- Streaming dataset support: backtrackable iterator ---
+
+
+class LookBackError(Exception):
+    """Raised when trying to look back in the history of a Backtrackable object."""
+
+    pass
+
+
+class LookAheadError(Exception):
+    """Raised when trying to look ahead in the future of a Backtrackable object."""
+
+    pass
+
+
+class Backtrackable[T]:
+    """Wrap any iterator/iterable so you can step back up to ``history`` items
+    and look ahead up to ``lookahead`` items.
+
+    Used by :class:`StreamingLeRobotDataset` to access previous and future items
+    for delta-timestamp queries without loading the entire dataset into memory.
+    """
+
+    __slots__ = ("_source", "_back_buf", "_ahead_buf", "_cursor", "_history", "_lookahead")
+
+    def __init__(self, iterable: Iterable[T], *, history: int = 1, lookahead: int = 0):
+        if history < 1:
+            raise ValueError("history must be >= 1")
+        if lookahead <= 0:
+            raise ValueError("lookahead must be > 0")
+
+        self._source: Iterator[T] = iter(iterable)
+        self._back_buf: deque[T] = deque(maxlen=history)
+        self._ahead_buf: deque[T] = deque(maxlen=lookahead) if lookahead > 0 else deque()
+        self._cursor: int = 0
+        self._history = history
+        self._lookahead = lookahead
+
+    def __iter__(self) -> "Backtrackable[T]":
+        return self
+
+    def __next__(self) -> T:
+        if self._cursor < 0:
+            self._cursor += 1
+            return self._back_buf[self._cursor]
+
+        item = self._ahead_buf.popleft() if self._ahead_buf else next(self._source)
+        self._back_buf.append(item)
+        self._cursor = 0
+        return item
+
+    def prev(self) -> T:
+        if len(self._back_buf) + self._cursor <= 1:
+            raise LookBackError("At start of history")
+        self._cursor -= 1
+        return self._back_buf[self._cursor]
+
+    def peek_back(self, n: int = 1) -> T:
+        if n < 0 or n + 1 > len(self._back_buf) + self._cursor:
+            raise LookBackError("peek_back distance out of range")
+        return self._back_buf[self._cursor - (n + 1)]
+
+    def peek_ahead(self, n: int = 1) -> T:
+        if n < 1:
+            raise LookAheadError("peek_ahead distance must be 1 or more")
+        elif n > self._lookahead:
+            raise LookAheadError("peek_ahead distance exceeds lookahead limit")
+
+        while len(self._ahead_buf) < n:
+            try:
+                item = next(self._source)
+                self._ahead_buf.append(item)
+            except StopIteration as err:
+                raise LookAheadError("peek_ahead: not enough items in source") from err
+
+        return self._ahead_buf[n - 1]
+
+    def history(self) -> list[T]:
+        if self._cursor == 0:
+            return list(self._back_buf)
+        return list(self._back_buf)[: self._cursor or None]
+
+    def can_peek_back(self, steps: int = 1) -> bool:
+        return steps <= len(self._back_buf) + self._cursor
+
+    def can_peek_ahead(self, steps: int = 1) -> bool:
+        if self._lookahead > 0 and steps > self._lookahead:
+            return False
+        try:
+            while len(self._ahead_buf) < steps:
+                if self._lookahead > 0 and len(self._ahead_buf) >= self._lookahead:
+                    return False
+                item = next(self._source)
+                self._ahead_buf.append(item)
+            return True
+        except StopIteration:
+            return False

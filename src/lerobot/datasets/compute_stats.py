@@ -487,6 +487,7 @@ def compute_episode_stats(
     episode_data: dict[str, list[str] | np.ndarray],
     features: dict,
     quantile_list: list[float] | None = None,
+    skip_images: bool = False,
 ) -> dict:
     """Compute comprehensive statistics for all features in an episode.
 
@@ -500,6 +501,7 @@ def compute_episode_stats(
             - For images/videos: list of file paths
             - For numerical data: numpy arrays
         features: Dictionary describing each feature's dtype and shape
+        skip_images: If True, skip image/video features (useful when images weren't recorded)
 
     Returns:
         Dictionary mapping feature names to their statistics dictionaries.
@@ -520,6 +522,8 @@ def compute_episode_stats(
             continue
 
         if features[key]["dtype"] in ["image", "video"]:
+            if skip_images:
+                continue
             ep_ft_array = sample_images(data)
             axes_to_reduce = (0, 2, 3)
             keepdims = True

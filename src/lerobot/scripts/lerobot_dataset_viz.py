@@ -302,7 +302,14 @@ def visualize_dataset(
             print("Ctrl-C received. Exiting.")
 
 
-def main():
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argparse parser used by ``main``.
+
+    Exposed as a function so tests (and other call sites that compose argv
+    for this script — e.g. the GUI's ``visualize_episode`` endpoint) can
+    dry-run-parse their argv against the same parser the script uses,
+    without executing the rest of ``main``.
+    """
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -314,8 +321,8 @@ def main():
     parser.add_argument(
         "--episode-index",
         type=int,
-        required=True,
-        help="Episode to visualize.",
+        default=None,
+        help="Episode to visualize. If not specified, all episodes are shown.",
     )
     parser.add_argument(
         "--root",
@@ -425,6 +432,17 @@ def main():
         ),
     )
 
+    return parser
+
+
+def main():
+    # Without init_logging the module's `logging.info / warning` calls were
+    # silently dropped (no handler configured). The script then ran for many
+    # seconds opening a dataset + spinning up Rerun while the user saw no
+    # progress output — particularly bad because the GUI launches this in a
+    # subprocess and the only log readout IS those `logging.*` calls.
+    init_logging()
+    parser = _build_parser()
     args = parser.parse_args()
 
     if args.display_mode == "foxglove":
@@ -442,11 +460,34 @@ def main():
     root = kwargs.pop("root")
     tolerance_s = kwargs.pop("tolerance_s")
 
-    init_logging()
-    logging.info("Loading dataset")
-    dataset = LeRobotDataset(repo_id, episodes=[args.episode_index], root=root, tolerance_s=tolerance_s)
+    # Determine which episodes to visualize
+    if args.episode_index is not None:
+        episode_indices = [args.episode_index]
+    elif args.display_mode == "foxglove":
+        # The foxglove backend blocks serving a single episode until interrupted,
+        # so the all-episodes loop below would never advance past the first one.
+        logging.warning(
+            "`--display-mode foxglove` without `--episode-index` serves only episode 0 "
+            "(the Foxglove server blocks until interrupted). Pass `--episode-index N` to "
+            "pick an episode."
+        )
+        episode_indices = [0]
+    else:
+        # Load metadata to get total episode count
+        logging.info("Loading dataset metadata")
+        meta_dataset = LeRobotDataset(repo_id, root=root, tolerance_s=tolerance_s, episodes=[0])
+        episode_indices = list(range(meta_dataset.meta.total_episodes))
+        del meta_dataset
 
-    visualize_dataset(dataset, **kwargs)
+    logging.info(f"Visualizing {len(episode_indices)} episode(s)")
+    for ep_idx in episode_indices:
+        logging.info(f"Loading episode {ep_idx}")
+        dataset = LeRobotDataset(repo_id, episodes=[ep_idx], root=root, tolerance_s=tolerance_s)
+        visualize_dataset(
+            dataset,
+            episode_index=ep_idx,
+            **{k: v for k, v in vars(args).items() if k != "episode_index"},
+        )
 
 
 if __name__ == "__main__":

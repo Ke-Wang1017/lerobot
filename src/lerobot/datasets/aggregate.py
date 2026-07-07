@@ -159,6 +159,7 @@ def update_meta_data(
     meta_idx,
     data_idx,
     videos_idx,
+    meta_src_to_dst: dict[tuple[int, int], tuple[int, int]] | None = None,
 ):
     """Updates metadata DataFrame with new chunk, file, and timestamp indices.
 
@@ -168,19 +169,64 @@ def update_meta_data(
     For data file indices, uses the 'src_to_dst' mapping from aggregate_data()
     to correctly map source file indices to their destination locations.
 
+    For meta/episodes file indices, uses 'meta_src_to_dst' mapping to correctly
+    map source meta file indices to their destination locations.
+
     Args:
         df: DataFrame containing the metadata to be updated.
         dst_meta: Destination dataset metadata.
         meta_idx: Dictionary containing current metadata chunk and file indices.
         data_idx: Dictionary containing current data chunk and file indices.
         videos_idx: Dictionary containing current video indices and timestamps.
+        meta_src_to_dst: Optional mapping from source (chunk, file) to destination (chunk, file)
+                         for meta/episodes files. If provided, uses this mapping instead of
+                         simple offset addition.
 
     Returns:
         pd.DataFrame: Updated DataFrame with adjusted indices and timestamps.
     """
 
-    df["meta/episodes/chunk_index"] = df["meta/episodes/chunk_index"] + meta_idx["chunk"]
-    df["meta/episodes/file_index"] = df["meta/episodes/file_index"] + meta_idx["file"]
+    # Update meta/episodes file indices using source-to-destination mapping
+    # This is critical for handling datasets that have multiple meta/episodes files
+    if meta_src_to_dst:
+        # Store original indices for lookup
+        df["_orig_meta_chunk"] = df["meta/episodes/chunk_index"].copy()
+        df["_orig_meta_file"] = df["meta/episodes/file_index"].copy()
+
+        # Vectorized mapping from (src_chunk, src_file) to (dst_chunk, dst_file)
+        mapping_index = pd.MultiIndex.from_tuples(
+            list(meta_src_to_dst.keys()),
+            names=["chunk_index", "file_index"],
+        )
+        mapping_values = list(meta_src_to_dst.values())
+        mapping_df = pd.DataFrame(
+            mapping_values,
+            index=mapping_index,
+            columns=["dst_chunk", "dst_file"],
+        )
+
+        # Construct a MultiIndex for each row based on original meta indices
+        row_index = pd.MultiIndex.from_arrays(
+            [df["_orig_meta_chunk"], df["_orig_meta_file"]],
+            names=["chunk_index", "file_index"],
+        )
+
+        # Align mapping to rows; missing keys fall back to the default destination
+        reindexed = mapping_df.reindex(row_index)
+        reindexed[["dst_chunk", "dst_file"]] = reindexed[["dst_chunk", "dst_file"]].fillna(
+            {"dst_chunk": meta_idx["chunk"], "dst_file": meta_idx["file"]}
+        )
+
+        # Assign mapped destination indices back to the DataFrame
+        df["meta/episodes/chunk_index"] = reindexed["dst_chunk"].to_numpy()
+        df["meta/episodes/file_index"] = reindexed["dst_file"].to_numpy()
+
+        # Clean up temporary columns
+        df = df.drop(columns=["_orig_meta_chunk", "_orig_meta_file"])
+    else:
+        # Fallback to simple offset (backward compatibility for single-file sources)
+        df["meta/episodes/chunk_index"] = df["meta/episodes/chunk_index"] + meta_idx["chunk"]
+        df["meta/episodes/file_index"] = df["meta/episodes/file_index"] + meta_idx["file"]
 
     # Update data file indices using source-to-destination mapping
     # This is critical for handling datasets that are already results of a merge
@@ -539,6 +585,26 @@ def aggregate_data(src_meta, dst_meta, data_idx, data_files_size_in_mb, chunk_si
             df = pd.read_parquet(src_path)
         df = update_data_df(df, src_meta, dst_meta)
 
+        # Align source columns to match destination schema (handles force-merge
+        # where features differ: pad missing columns, drop extras)
+        dst_parquet_cols = [k for k, v in dst_meta.features.items() if v.get("dtype") not in ("video",)]
+        for col in dst_parquet_cols:
+            if col not in df.columns:
+                feat = dst_meta.features[col]
+                dtype_str = feat.get("dtype", "float32")
+                if dtype_str == "string":
+                    df[col] = ""
+                elif dtype_str in ("int64", "int32"):
+                    df[col] = 0
+                else:
+                    df[col] = 0.0
+        # Drop columns not in destination features
+        extra = [c for c in df.columns if c not in dst_parquet_cols]
+        if extra:
+            df = df.drop(columns=extra)
+        # Reorder to match destination
+        df = df[[c for c in dst_parquet_cols if c in df.columns]]
+
         # Write data and get the actual destination file it was written to
         # This avoids duplicating the rotation logic here
         data_idx, (dst_chunk, dst_file) = append_or_create_parquet_file(
@@ -570,6 +636,9 @@ def aggregate_metadata(src_meta, dst_meta, meta_idx, data_idx, videos_idx):
     Reads source metadata files, updates all indices and timestamps,
     and writes them to the destination with proper file rotation.
 
+    Builds a meta_src_to_dst mapping to correctly remap meta/episodes file indices,
+    similar to how aggregate_data() handles data file indices.
+
     Args:
         src_meta: Source dataset metadata.
         dst_meta: Destination dataset metadata.
@@ -590,6 +659,50 @@ def aggregate_metadata(src_meta, dst_meta, meta_idx, data_idx, videos_idx):
     }
 
     chunk_file_ids = sorted(chunk_file_ids)
+
+    # First pass: Build meta_src_to_dst mapping by simulating the write process
+    # This predicts which destination file each source file will map to
+    meta_src_to_dst: dict[tuple[int, int], tuple[int, int]] = {}
+    sim_idx = {"chunk": meta_idx["chunk"], "file": meta_idx["file"]}
+    sim_dst_sizes: dict[tuple[int, int], float] = {}  # Track simulated destination file sizes
+
+    for src_chunk_idx, src_file_idx in chunk_file_ids:
+        src_path = src_meta.root / DEFAULT_EPISODES_PATH.format(
+            chunk_index=src_chunk_idx, file_index=src_file_idx
+        )
+        src_size = get_parquet_file_size_in_mb(src_path)
+
+        dst_key = (sim_idx["chunk"], sim_idx["file"])
+        dst_path = dst_meta.root / DEFAULT_EPISODES_PATH.format(
+            chunk_index=sim_idx["chunk"], file_index=sim_idx["file"]
+        )
+
+        # Check if destination file exists (either on disk or simulated)
+        dst_exists = dst_path.exists() or dst_key in sim_dst_sizes
+
+        if not dst_exists:
+            # New destination file
+            meta_src_to_dst[(src_chunk_idx, src_file_idx)] = dst_key
+            sim_dst_sizes[dst_key] = src_size
+        else:
+            # Check if we need to rotate based on size
+            current_dst_size = get_parquet_file_size_in_mb(dst_path) if dst_path.exists() else 0
+            current_dst_size += sim_dst_sizes.get(dst_key, 0)
+
+            if current_dst_size + src_size >= DEFAULT_DATA_FILE_SIZE_IN_MB:
+                # Rotate to new file
+                sim_idx["chunk"], sim_idx["file"] = update_chunk_file_indices(
+                    sim_idx["chunk"], sim_idx["file"], DEFAULT_CHUNK_SIZE
+                )
+                dst_key = (sim_idx["chunk"], sim_idx["file"])
+                meta_src_to_dst[(src_chunk_idx, src_file_idx)] = dst_key
+                sim_dst_sizes[dst_key] = src_size
+            else:
+                # Append to existing
+                meta_src_to_dst[(src_chunk_idx, src_file_idx)] = dst_key
+                sim_dst_sizes[dst_key] = sim_dst_sizes.get(dst_key, 0) + src_size
+
+    # Second pass: Actual writes with correct indices
     for chunk_idx, file_idx in chunk_file_ids:
         src_path = src_meta.root / DEFAULT_EPISODES_PATH.format(chunk_index=chunk_idx, file_index=file_idx)
         df = pd.read_parquet(src_path)
@@ -599,6 +712,7 @@ def aggregate_metadata(src_meta, dst_meta, meta_idx, data_idx, videos_idx):
             meta_idx,
             data_idx,
             videos_idx,
+            meta_src_to_dst=meta_src_to_dst,
         )
 
         meta_idx, _ = append_or_create_parquet_file(

@@ -58,6 +58,7 @@ class DatasetReader:
         delta_timestamps: dict[str, list[float]] | None,
         image_transforms: Callable | None,
         return_uint8: bool = False,
+        record_images: bool = True,
         depth_output_unit: str = DEFAULT_DEPTH_UNIT,
     ):
         """Initialize the reader with metadata, filtering, and transform config.
@@ -76,6 +77,9 @@ class DatasetReader:
                 relative timestamp offsets for temporal context windows.
             image_transforms: Optional torchvision v2 transform applied to
                 visual features.
+            record_images: When ``False``, the cache-sufficiency check skips
+                the per-episode video-file existence check (used by fast-eval
+                workflows that don't write images/video).
             return_uint8: If True, return RGB video frames as raw uint8 tensors
                 instead of normalized float32.
             depth_output_unit: Physical unit depth maps are dequantized to
@@ -90,6 +94,7 @@ class DatasetReader:
             raise TypeError("image_transforms must be callable or None.")
         self._image_transforms = image_transforms
         self._return_uint8 = return_uint8
+        self._record_images = record_images
         self._depth_output_unit = depth_output_unit
 
         self.hf_dataset: datasets.Dataset | None = None
@@ -185,7 +190,7 @@ class DatasetReader:
         if not requested_episodes.issubset(available_episodes):
             return False
 
-        if len(self._meta.video_keys) > 0:
+        if len(self._meta.video_keys) > 0 and self._record_images:
             for ep_idx in requested_episodes:
                 for vid_key in self._meta.video_keys:
                     video_path = self.root / self._meta.get_video_file_path(ep_idx, vid_key)
@@ -350,5 +355,11 @@ class DatasetReader:
         # Add task as a string
         task_idx = item["task_index"].item()
         item["task"] = self._meta.tasks.iloc[task_idx].name
+
+        # add subtask information if available (fork: feeds language-conditioning,
+        # e.g. tokenizer_processor.get_subtask -> OBS_LANGUAGE_SUBTASK_TOKENS)
+        if "subtask_index" in self._meta.features and self._meta.subtasks is not None:
+            subtask_idx = item["subtask_index"].item()
+            item["subtask"] = self._meta.subtasks.iloc[subtask_idx].name
 
         return item

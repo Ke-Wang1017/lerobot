@@ -42,6 +42,7 @@ from lerobot.transforms import (
     ImageTransformsConfig,
     make_transform_from_config,
 )
+from lerobot.utils.utils import init_logging
 
 OUTPUT_DIR = Path("outputs/image_transforms")
 to_pil = ToPILImage()
@@ -127,6 +128,10 @@ def visualize_image_transforms(cfg: DatasetConfig, output_dir: Path = OUTPUT_DIR
 
 
 def main():
+    # Without init_logging the script's `logging.warning("missing rotation
+    # source frame…")` would silently drop, masking misconfigured transform
+    # runs. Initialise so warnings actually reach stderr.
+    init_logging()
     visualize_image_transforms()
 
 

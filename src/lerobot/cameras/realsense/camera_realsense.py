@@ -132,8 +132,36 @@ class RealSenseCamera(Camera):
         self.use_depth = config.use_depth
         self.warmup_s = config.warmup_s
 
+        # Depth filter configuration
+        self.enable_decimation = config.enable_decimation
+        self.enable_spatial = config.enable_spatial
+        self.enable_temporal = config.enable_temporal
+        self.enable_hole_filling = config.enable_hole_filling
+
+        # Optional post-grab processor: when set, the grab thread runs it on
+        # (color_rgb_uint8, depth_uint16) and caches ONLY the resulting color.
+        # Depth is consumed in the grab thread and never exposed to the
+        # consumer. Used to push depth-based image processing (e.g. depth-edge
+        # overlay) off the control loop without an extra cross-thread copy of
+        # the depth frame. Callers install it via direct attribute assignment
+        # after construction (typically the robot's ``__init__``) — keeping it
+        # off the config so different robots can install different processors
+        # on the same camera type without changing the camera config schema.
+        # Required protocol: ``processor.process_frame_with_depth(color, depth)``
+        # returning the processed color frame.
+        self.post_grab_processor = None
+
         self.rs_pipeline: rs.pipeline | None = None
         self.rs_profile: rs.pipeline_profile | None = None
+        self.align_to_color: Any | None = None  # rs.align object for depth-to-color alignment
+
+        # RealSense depth post-processing filters (created once, reused every frame)
+        self.decimation_filter: Any | None = None
+        self.spatial_filter: Any | None = None
+        self.temporal_filter: Any | None = None
+        self.hole_filling_filter: Any | None = None
+        self.depth_to_disparity: Any | None = None  # For spatial/temporal filters
+        self.disparity_to_depth: Any | None = None  # For spatial/temporal filters
 
         self.thread: Thread | None = None
         self.stop_event: Event | None = None
@@ -191,6 +219,36 @@ class RealSenseCamera(Camera):
             ) from e
 
         self._configure_capture_settings()
+
+        # Create align object and depth filters BEFORE starting the read thread,
+        # so the background thread can perform alignment + filtering per frame.
+        if self.use_depth:
+            self.align_to_color = rs.align(rs.stream.color)
+
+            # Initialize depth post-processing filters (once, reused every frame)
+            if self.enable_decimation:
+                self.decimation_filter = rs.decimation_filter()
+                self.decimation_filter.set_option(rs.option.filter_magnitude, 2)
+
+            if self.enable_spatial:
+                self.spatial_filter = rs.spatial_filter()
+                self.spatial_filter.set_option(rs.option.filter_magnitude, 2)
+                self.spatial_filter.set_option(rs.option.filter_smooth_alpha, 0.5)
+                self.spatial_filter.set_option(rs.option.filter_smooth_delta, 20)
+
+            if self.enable_temporal:
+                self.temporal_filter = rs.temporal_filter()
+                self.temporal_filter.set_option(rs.option.filter_smooth_alpha, 0.4)
+                self.temporal_filter.set_option(rs.option.filter_smooth_delta, 20)
+
+            if self.enable_hole_filling:
+                self.hole_filling_filter = rs.hole_filling_filter()
+
+            # Disparity transforms (needed for spatial/temporal filters)
+            if self.enable_spatial or self.enable_temporal:
+                self.depth_to_disparity = rs.disparity_transform(True)
+                self.disparity_to_depth = rs.disparity_transform(False)
+
         self._start_read_thread()
 
         # NOTE(Steven/Caroline): Enforcing at least one second of warmup as RS cameras need a bit of time before the first read. If we don't wait, the first read from the warmup will raise.
@@ -202,8 +260,12 @@ class RealSenseCamera(Camera):
             warmup_read(timeout_ms=self.warmup_s * 1000)
             time.sleep(0.1)
         with self.frame_lock:
+            # A post_grab_processor consumes depth in the grab thread and caches only
+            # the processed color — by design ``latest_depth_frame`` stays None for
+            # those cameras, so don't require depth here.
+            needs_depth = self.use_depth and self.post_grab_processor is None
             if (self.use_rgb and self.latest_color_frame is None) or (
-                self.use_depth and self.latest_depth_frame is None
+                needs_depth and self.latest_depth_frame is None
             ):
                 raise ConnectionError(f"{self} failed to capture frames during warmup.")
 
@@ -291,9 +353,7 @@ class RealSenseCamera(Camera):
                     rs.stream.color, self.capture_width, self.capture_height, rs.format.rgb8, self.fps
                 )
             if self.use_depth:
-                rs_config.enable_stream(
-                    rs.stream.depth, self.capture_width, self.capture_height, rs.format.z16, self.fps
-                )
+                rs_config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, self.fps)
         else:
             if self.use_rgb:
                 rs_config.enable_stream(rs.stream.color)
@@ -378,6 +438,103 @@ class RealSenseCamera(Camera):
 
         return frame
 
+    def _apply_depth_filters(self, frame: Any) -> Any:
+        """
+        Apply RealSense post-processing filters to depth frame or frameset.
+
+        Filters are applied in the correct order following RealSense SDK best practices:
+        1. Decimation (reduces resolution)
+        2. Depth-to-Disparity (for spatial/temporal filters)
+        3. Spatial filter (edge-preserving smoothing)
+        4. Temporal filter (frame history smoothing)
+        5. Disparity-to-Depth (convert back)
+        6. Hole filling (fill missing depth values)
+
+        Note: Filters should be applied BEFORE alignment for best results,
+        as they are designed to work on native depth sensor data.
+
+        Args:
+            frame: RealSense depth frame or frameset object
+
+        Returns:
+            Filtered frame (same type as input)
+        """
+        # Apply decimation first (reduces resolution)
+        if self.enable_decimation and self.decimation_filter is not None:
+            frame = self.decimation_filter.process(frame)
+
+        # Spatial and temporal filters work better in disparity space
+        if self.enable_spatial or self.enable_temporal:
+            if self.depth_to_disparity is not None:
+                frame = self.depth_to_disparity.process(frame)
+
+                if self.enable_spatial and self.spatial_filter is not None:
+                    frame = self.spatial_filter.process(frame)
+
+                if self.enable_temporal and self.temporal_filter is not None:
+                    frame = self.temporal_filter.process(frame)
+
+                if self.disparity_to_depth is not None:
+                    frame = self.disparity_to_depth.process(frame)
+
+        # Hole filling last
+        if self.enable_hole_filling and self.hole_filling_filter is not None:
+            frame = self.hole_filling_filter.process(frame)
+
+        return frame
+
+    def read_color_and_aligned_depth(
+        self, color_mode: ColorMode | None = None, timeout_ms: int = 200
+    ) -> tuple[NDArray[Any], NDArray[Any]]:
+        """
+        Returns the latest aligned color and depth frames from the background thread.
+
+        The background thread continuously reads synchronized framesets from the
+        pipeline, aligns depth to color coordinates, and applies post-processing
+        filters. This method simply returns the latest cached result.
+
+        Args:
+            color_mode (Optional[ColorMode]): Unused, kept for API compatibility.
+            timeout_ms (int): Maximum time in milliseconds to wait for a frame
+                to become available. Defaults to 200ms.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]:
+                - color_image: The captured color frame (height, width, 3) uint8
+                - depth_image: The aligned depth map (height, width, 1) uint16 in millimeters
+
+        Raises:
+            DeviceNotConnectedError: If the camera is not connected.
+            RuntimeError: If depth is not enabled or no frames are available.
+        """
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+        if not self.use_depth:
+            raise RuntimeError(f"Depth stream is not enabled for {self}.")
+        if self.post_grab_processor is not None:
+            raise RuntimeError(
+                f"{self}: depth has been consumed by post_grab_processor "
+                f"({type(self.post_grab_processor).__name__}); the processed color is in "
+                f"``read_latest()`` / ``async_read()``. Detach the processor first if you "
+                f"need raw depth."
+            )
+
+        if self.thread is None or not self.thread.is_alive():
+            raise RuntimeError(f"{self} read thread is not running.")
+
+        if not self.new_frame_event.wait(timeout=timeout_ms / 1000.0):
+            raise TimeoutError(f"Timed out waiting for frame from {self} after {timeout_ms} ms.")
+
+        with self.frame_lock:
+            color_frame = self.latest_color_frame
+            depth_frame = self.latest_depth_frame
+            self.new_frame_event.clear()
+
+        if color_frame is None or depth_frame is None:
+            raise RuntimeError(f"No aligned frames available for {self}.")
+
+        return color_frame, depth_frame
+
     @check_if_not_connected
     def read(self, color_mode: ColorMode | None = None, timeout_ms: int = 0) -> NDArray[Any]:
         """
@@ -440,6 +597,8 @@ class RealSenseCamera(Camera):
             )
 
         if depth_frame:
+            # Depth frames have native resolution (e.g., 848x480) different from color
+            # Skip dimension check for depth - it will be resized when needed
             h, w = image.shape
         else:
             h, w, c = image.shape
@@ -447,10 +606,11 @@ class RealSenseCamera(Camera):
             if c != 3:
                 raise RuntimeError(f"{self} frame channels={c} do not match expected 3 channels (RGB/BGR).")
 
-        if h != self.capture_height or w != self.capture_width:
-            raise RuntimeError(
-                f"{self} frame width={w} or height={h} do not match configured width={self.capture_width} or height={self.capture_height}."
-            )
+            # Only check dimensions for color frames
+            if h != self.capture_height or w != self.capture_width:
+                raise RuntimeError(
+                    f"{self} frame width={w} or height={h} do not match configured width={self.capture_width} or height={self.capture_height}."
+                )
 
         processed_image = image
         if self.color_mode == ColorMode.BGR:
@@ -479,26 +639,77 @@ class RealSenseCamera(Camera):
         failure_count = 0
         while not stop_event.is_set():
             try:
-                frame = self._read_from_hardware()
+                frameset = self._read_from_hardware()
 
-                if self.use_rgb:
-                    color_frame_raw = frame.get_color_frame()
-                    color_frame = np.asanyarray(color_frame_raw.get_data())
-                    processed_color_frame = self._postprocess_image(color_frame)
+                processed_color_frame = None
+                processed_depth_frame = None
 
-                if self.use_depth:
-                    depth_frame_raw = frame.get_depth_frame()
+                if self.use_depth and self.align_to_color is not None:
+                    # Align depth to color coordinate system (single frameset,
+                    # so color and depth are synchronized).
+                    aligned = self.align_to_color.process(frameset)
+                    depth_frame_raw = aligned.get_depth_frame()
+
+                    # Apply depth post-processing filters
+                    depth_frame_raw = self._apply_depth_filters(depth_frame_raw)
                     depth_frame = np.asanyarray(depth_frame_raw.get_data())
+
+                    if self.use_rgb:
+                        color_frame_raw = aligned.get_color_frame()
+                        color_frame = np.asanyarray(color_frame_raw.get_data())
+
+                        # Resize depth back to color dimensions if decimation changed it
+                        if depth_frame.shape != color_frame.shape[:2]:
+                            depth_frame = cv2.resize(
+                                depth_frame,
+                                (color_frame.shape[1], color_frame.shape[0]),
+                                interpolation=cv2.INTER_NEAREST,
+                            )
+                        processed_color_frame = self._postprocess_image(color_frame)
+
                     processed_depth_frame = self._postprocess_image(depth_frame, depth_frame=True)
-                    if processed_depth_frame.ndim == 2:  # (H, W) -> (H, W, 1)
-                        processed_depth_frame = processed_depth_frame[..., np.newaxis]
+                else:
+                    if self.use_rgb:
+                        color_frame_raw = frameset.get_color_frame()
+                        color_frame = np.asanyarray(color_frame_raw.get_data())
+                        processed_color_frame = self._postprocess_image(color_frame)
+                    if self.use_depth:
+                        depth_frame_raw = frameset.get_depth_frame()
+                        depth_frame = np.asanyarray(depth_frame_raw.get_data())
+                        processed_depth_frame = self._postprocess_image(depth_frame, depth_frame=True)
+
+                # Run the optional in-camera post-processor on (color, depth)
+                # BEFORE we cache. Pushes depth-aware image processing (e.g.
+                # depth-edge overlay) off the control loop into this thread,
+                # which has slack between camera frames. On any exception the
+                # processor logs and we fall back to the raw color frame so a
+                # one-off processor bug never bricks the camera stream.
+                # The processor always receives 2-D (H, W) depth (fork contract).
+                if self.post_grab_processor is not None and processed_depth_frame is not None:
+                    try:
+                        processed_color_frame = self.post_grab_processor.process_frame_with_depth(
+                            processed_color_frame, processed_depth_frame
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "%s: post_grab_processor failed (%s); caching raw color frame.", self, e
+                        )
+                    # Depth has been consumed; don't cache it for consumers.
+                    processed_depth_frame = None
+
+                # Normalize surviving depth to (H, W, 1) for external consumers
+                # (read_depth / async_read_depth). Only depth that is actually
+                # cached is expanded here (upstream contract); the in-camera
+                # post_grab_processor above always gets 2-D depth.
+                if processed_depth_frame is not None and processed_depth_frame.ndim == 2:
+                    processed_depth_frame = processed_depth_frame[..., np.newaxis]
 
                 capture_time = time.perf_counter()
 
                 with self.frame_lock:
                     if self.use_rgb:
                         self.latest_color_frame = processed_color_frame
-                    if self.use_depth:
+                    if processed_depth_frame is not None:
                         self.latest_depth_frame = processed_depth_frame
                     self.latest_timestamp = capture_time
                 self.new_frame_event.set()

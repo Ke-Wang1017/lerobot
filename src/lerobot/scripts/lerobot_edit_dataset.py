@@ -155,6 +155,28 @@ Convert image dataset to video format and push to hub:
         --operation.type convert_image_to_video \
         --push_to_hub true
 
+Trim episode - remove 1.5 seconds from start (WARNING: modifies in-place):
+    python -m lerobot.scripts.lerobot_edit_dataset \
+        --repo_id lerobot/pusht \
+        --operation.type trim_episode \
+        --operation.episode_index 0 \
+        --operation.trim_start_s 1.5
+
+Trim episode - remove 2 seconds from end (WARNING: modifies in-place):
+    python -m lerobot.scripts.lerobot_edit_dataset \
+        --repo_id lerobot/pusht \
+        --operation.type trim_episode \
+        --operation.episode_index 0 \
+        --operation.trim_end_s 2.0
+
+Trim episode - remove from both ends (WARNING: modifies in-place):
+    python -m lerobot.scripts.lerobot_edit_dataset \
+        --repo_id lerobot/pusht \
+        --operation.type trim_episode \
+        --operation.episode_index 0 \
+        --operation.trim_start_s 0.5 \
+        --operation.trim_end_s 1.0
+
 Show dataset information:
     lerobot-edit-dataset \
         --repo_id lerobot/pusht_image \
@@ -259,6 +281,7 @@ from lerobot.datasets import (
     remove_feature,
     split_dataset,
 )
+from lerobot.datasets.dataset_tools import trim_episode
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.utils import init_logging
 
@@ -344,6 +367,14 @@ class InfoConfig(OperationConfig):
     show_features: bool = False
 
 
+@OperationConfig.register_subclass("trim_episode")
+@dataclass
+class TrimEpisodeConfig(OperationConfig):
+    episode_index: int = 0
+    trim_start_s: float = 0.0
+    trim_end_s: float = 0.0
+
+
 @dataclass
 class EditDatasetConfig:
     # Operation configuration.
@@ -391,7 +422,9 @@ def get_output_path(
 
         if input_path.exists():
             if backup_path.exists():
+                # safe-destruct: in-place edit, drops prior _old backup; user-confirmed
                 shutil.rmtree(backup_path)
+            # safe-destruct: in-place edit, swap to _old before write; user-confirmed
             shutil.move(input_path, backup_path)
 
     return output_repo_id, output_path
@@ -646,6 +679,54 @@ def handle_convert_image_to_video(cfg: EditDatasetConfig) -> None:
         logging.info("Dataset saved locally (not pushed to hub)")
 
 
+def handle_trim_episode(cfg: EditDatasetConfig) -> None:
+    """Handle trim_episode operation - trims frames from an episode in-place."""
+    if not isinstance(cfg.operation, TrimEpisodeConfig):
+        raise ValueError("Operation config must be TrimEpisodeConfig")
+
+    episode_index = cfg.operation.episode_index
+    trim_start_s = cfg.operation.trim_start_s
+    trim_end_s = cfg.operation.trim_end_s
+
+    if trim_start_s == 0 and trim_end_s == 0:
+        raise ValueError("Must specify at least one of trim_start_s or trim_end_s")
+
+    # Warn about in-place modification behavior
+    if cfg.new_repo_id is not None:
+        logging.warning("trim_episode modifies datasets in-place. The --new_repo_id parameter is ignored.")
+
+    dataset = LeRobotDataset(cfg.repo_id, root=cfg.root)
+    logging.warning(f"Modifying dataset in-place at {dataset.root}. Original data will be overwritten.")
+
+    logging.info(f"Trimming episode {episode_index} in {cfg.repo_id}")
+    if trim_start_s > 0:
+        logging.info(f"  Trim from start: {trim_start_s}s")
+    if trim_end_s > 0:
+        logging.info(f"  Trim from end: {trim_end_s}s")
+
+    modified_dataset = trim_episode(
+        dataset,
+        episode_index=episode_index,
+        trim_start_s=trim_start_s,
+        trim_end_s=trim_end_s,
+    )
+
+    # Reload metadata to show updated info
+    from lerobot.datasets.io_utils import load_episodes
+
+    modified_dataset.meta.episodes = load_episodes(modified_dataset.root)
+
+    logging.info(f"Dataset modified at {dataset.root}")
+    logging.info(
+        f"Episode {episode_index} new length: {modified_dataset.meta.episodes[episode_index]['length']} frames"
+    )
+    logging.info(f"Total frames: {modified_dataset.meta.total_frames}")
+
+    if cfg.push_to_hub:
+        logging.info(f"Pushing to hub as {cfg.repo_id}")
+        modified_dataset.push_to_hub()
+
+
 def handle_recompute_stats(cfg: EditDatasetConfig) -> None:
     if not isinstance(cfg.operation, RecomputeStatsConfig):
         raise ValueError("Operation config must be RecomputeStatsConfig")
@@ -834,6 +915,8 @@ def edit_dataset(cfg: EditDatasetConfig) -> None:
         handle_modify_tasks(cfg)
     elif operation_type == "convert_image_to_video":
         handle_convert_image_to_video(cfg)
+    elif operation_type == "trim_episode":
+        handle_trim_episode(cfg)
     elif operation_type == "recompute_stats":
         handle_recompute_stats(cfg)
     elif operation_type == "reencode_videos":

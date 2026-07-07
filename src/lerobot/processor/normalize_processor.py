@@ -392,13 +392,17 @@ class _NormalizationMixin:
                 )
 
             denom = q99 - q01
-            # Avoid division by zero by adding epsilon when quantiles are identical
-            denom = torch.where(
-                denom == 0, torch.tensor(self.eps, device=tensor.device, dtype=tensor.dtype), denom
-            )
+            # Avoid division by zero or very small values (e.g., from nearly-stationary joints)
+            # Use 0.1 threshold to catch small denominators like 0.001604 that cause explosions
+            # When range is < 0.1, clamp to 1.0 to normalize to reasonable values
+            min_denom = torch.tensor(1.0, device=tensor.device, dtype=tensor.dtype)
+            denom = torch.where(torch.abs(denom) < 0.1, min_denom, denom)
             if inverse:
                 return (tensor + 1.0) * denom / 2.0 + q01
-            return 2.0 * (tensor - q01) / denom - 1.0
+            # Normalize and clip to prevent outliers from exploding
+            # Clip to [-10, 10] to handle cases where raw values are far from quantiles
+            normalized = 2.0 * (tensor - q01) / denom - 1.0
+            return torch.clamp(normalized, -10.0, 10.0)
 
         if norm_mode == NormalizationMode.QUANTILE10:
             q10 = stats.get("q10", None)
@@ -409,13 +413,16 @@ class _NormalizationMixin:
                 )
 
             denom = q90 - q10
-            # Avoid division by zero by adding epsilon when quantiles are identical
-            denom = torch.where(
-                denom == 0, torch.tensor(self.eps, device=tensor.device, dtype=tensor.dtype), denom
-            )
+            # Avoid division by zero or very small values (e.g., from nearly-stationary joints)
+            # Use 0.1 threshold to catch small denominators that cause explosions
+            # When range is < 0.1, clamp to 1.0 to normalize to reasonable values
+            min_denom = torch.tensor(1.0, device=tensor.device, dtype=tensor.dtype)
+            denom = torch.where(torch.abs(denom) < 0.1, min_denom, denom)
             if inverse:
                 return (tensor + 1.0) * denom / 2.0 + q10
-            return 2.0 * (tensor - q10) / denom - 1.0
+            # Normalize and clip to prevent outliers from exploding
+            normalized = 2.0 * (tensor - q10) / denom - 1.0
+            return torch.clamp(normalized, -10.0, 10.0)
 
         # If necessary stats are missing, return input unchanged.
         return tensor

@@ -26,7 +26,9 @@ pytest.importorskip("datasets", reason="datasets is required (install lerobot[da
 
 from lerobot.configs import DepthEncoderConfig, RGBEncoderConfig
 from lerobot.datasets.dataset_tools import (
+    _sweep_orphan_tmp_shards,
     add_features,
+    add_features_inplace,
     convert_image_to_video_dataset,
     delete_episodes,
     merge_datasets,
@@ -34,7 +36,10 @@ from lerobot.datasets.dataset_tools import (
     modify_tasks,
     reencode_dataset,
     remove_feature,
+    remove_features_inplace,
+    rename_features_inplace,
     split_dataset,
+    trim_episode,
 )
 from lerobot.datasets.io_utils import load_info
 from tests.datasets.test_video_encoding import require_h264, require_hevc, require_libsvtav1
@@ -1332,6 +1337,732 @@ def test_convert_image_to_video_dataset_subset_episodes(tmp_path):
 
         if output_dir.exists():
             shutil.rmtree(output_dir)
+
+
+# ============================================================================
+# trim_episode tests
+# ============================================================================
+
+
+def test_trim_episode_start_basic(sample_dataset):
+    """Test trimming frames from the start of an episode."""
+    from lerobot.datasets.io_utils import load_episodes
+
+    # Ensure episodes are loaded
+    if sample_dataset.meta.episodes is None:
+        sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
+
+    original_length = sample_dataset.meta.episodes[0]["length"]
+    original_total_frames = sample_dataset.meta.total_frames
+
+    # Trim 0.2 seconds from start (at 30 fps, that's 6 frames assuming fps=30, or 2 frames at fps=10)
+    trim_duration = 0.2
+    frames_to_trim = int(trim_duration * sample_dataset.fps)
+
+    trim_episode(sample_dataset, episode_index=0, trim_start_s=trim_duration)
+
+    # Reload to see changes
+    sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
+    sample_dataset._ensure_reader().load_and_activate()
+
+    # Verify episode length decreased
+    new_length = sample_dataset.meta.episodes[0]["length"]
+    assert new_length == original_length - frames_to_trim
+
+    # Verify total frames decreased
+    assert sample_dataset.meta.total_frames == original_total_frames - frames_to_trim
+
+
+def test_trim_episode_end_basic(sample_dataset):
+    """Test trimming frames from the end of an episode."""
+    from lerobot.datasets.io_utils import load_episodes
+
+    # Ensure episodes are loaded
+    if sample_dataset.meta.episodes is None:
+        sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
+
+    original_length = sample_dataset.meta.episodes[0]["length"]
+    original_total_frames = sample_dataset.meta.total_frames
+
+    trim_duration = 0.2
+    frames_to_trim = int(trim_duration * sample_dataset.fps)
+
+    trim_episode(sample_dataset, episode_index=0, trim_end_s=trim_duration)
+
+    # Reload to see changes
+    sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
+    sample_dataset._ensure_reader().load_and_activate()
+
+    new_length = sample_dataset.meta.episodes[0]["length"]
+    assert new_length == original_length - frames_to_trim
+    assert sample_dataset.meta.total_frames == original_total_frames - frames_to_trim
+
+
+def test_trim_episode_both_ends(sample_dataset):
+    """Test trimming frames from both ends of an episode."""
+    from lerobot.datasets.io_utils import load_episodes
+
+    # Ensure episodes are loaded
+    if sample_dataset.meta.episodes is None:
+        sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
+
+    original_length = sample_dataset.meta.episodes[0]["length"]
+    original_total_frames = sample_dataset.meta.total_frames
+
+    trim_start = 0.1
+    trim_end = 0.1
+    frames_to_trim = int(trim_start * sample_dataset.fps) + int(trim_end * sample_dataset.fps)
+
+    trim_episode(sample_dataset, episode_index=0, trim_start_s=trim_start, trim_end_s=trim_end)
+
+    # Reload to see changes
+    sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
+    sample_dataset._ensure_reader().load_and_activate()
+
+    new_length = sample_dataset.meta.episodes[0]["length"]
+    assert new_length == original_length - frames_to_trim
+    assert sample_dataset.meta.total_frames == original_total_frames - frames_to_trim
+
+
+def test_trim_episode_preserves_other_episodes(sample_dataset):
+    """Test that trimming one episode doesn't change other episodes' lengths."""
+    from lerobot.datasets.io_utils import load_episodes
+
+    # Ensure episodes are loaded
+    if sample_dataset.meta.episodes is None:
+        sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
+
+    # Get original lengths of all episodes
+    original_lengths = [sample_dataset.meta.episodes[i]["length"] for i in range(5)]
+
+    trim_duration = 0.2
+    frames_to_trim = int(trim_duration * sample_dataset.fps)
+
+    # Trim episode 2
+    trim_episode(sample_dataset, episode_index=2, trim_start_s=trim_duration)
+
+    # Reload to see changes
+    sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
+
+    # Check that other episodes are unchanged
+    for i in range(5):
+        if i == 2:
+            assert sample_dataset.meta.episodes[i]["length"] == original_lengths[i] - frames_to_trim
+        else:
+            assert sample_dataset.meta.episodes[i]["length"] == original_lengths[i]
+
+
+def test_trim_episode_shifts_subsequent_global_indices(sample_dataset):
+    """Test that global indices are shifted for subsequent episodes."""
+    from lerobot.datasets.io_utils import load_episodes
+
+    # Ensure episodes are loaded
+    if sample_dataset.meta.episodes is None:
+        sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
+
+    # Get original indices
+    original_ep2_from = sample_dataset.meta.episodes[2]["dataset_from_index"]
+    original_ep3_from = sample_dataset.meta.episodes[3]["dataset_from_index"]
+
+    trim_duration = 0.2
+    frames_to_trim = int(trim_duration * sample_dataset.fps)
+
+    # Trim episode 1
+    trim_episode(sample_dataset, episode_index=1, trim_start_s=trim_duration)
+
+    # Reload to see changes
+    sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
+
+    # Episode 2 and 3 should have their indices shifted
+    assert sample_dataset.meta.episodes[2]["dataset_from_index"] == original_ep2_from - frames_to_trim
+    assert sample_dataset.meta.episodes[3]["dataset_from_index"] == original_ep3_from - frames_to_trim
+
+
+def test_trim_episode_resets_timestamps(sample_dataset):
+    """Test that timestamps are reset to start at 0 after trimming start."""
+    from lerobot.datasets.io_utils import load_episodes
+
+    trim_duration = 0.2
+
+    # Trim episode 0
+    trim_episode(sample_dataset, episode_index=0, trim_start_s=trim_duration)
+
+    # Reload to see changes
+    sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
+    sample_dataset._ensure_reader().load_and_activate()
+
+    # Get first frame of episode 0
+    ep0_from = sample_dataset.meta.episodes[0]["dataset_from_index"]
+    first_frame = sample_dataset.hf_dataset[ep0_from]
+
+    # Timestamp should start at 0
+    assert first_frame["timestamp"] == 0.0
+    assert first_frame["frame_index"] == 0
+
+
+def test_trim_episode_invalid_index(sample_dataset):
+    """Test error handling for invalid episode index."""
+    with pytest.raises(ValueError, match="Invalid episode_index"):
+        trim_episode(sample_dataset, episode_index=10, trim_start_s=0.1)
+
+    with pytest.raises(ValueError, match="Invalid episode_index"):
+        trim_episode(sample_dataset, episode_index=-1, trim_start_s=0.1)
+
+
+def test_trim_episode_trim_too_much(sample_dataset):
+    """Test error when trying to trim more than episode length."""
+    from lerobot.datasets.io_utils import load_episodes
+
+    # Ensure episodes are loaded
+    if sample_dataset.meta.episodes is None:
+        sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
+
+    # Each episode has 10 frames at some fps
+    # Try to trim entire episode
+    episode_duration = sample_dataset.meta.episodes[0]["length"] / sample_dataset.fps
+
+    with pytest.raises(ValueError, match="At least one frame must remain"):
+        trim_episode(sample_dataset, episode_index=0, trim_start_s=episode_duration)
+
+
+def test_trim_episode_negative_duration(sample_dataset):
+    """Test error when providing negative trim duration."""
+    with pytest.raises(ValueError, match="must be non-negative"):
+        trim_episode(sample_dataset, episode_index=0, trim_start_s=-0.1)
+
+    with pytest.raises(ValueError, match="must be non-negative"):
+        trim_episode(sample_dataset, episode_index=0, trim_end_s=-0.1)
+
+
+def test_trim_episode_no_op(sample_dataset):
+    """Test that zero trim amounts returns dataset unchanged."""
+    from lerobot.datasets.io_utils import load_episodes
+
+    # Ensure episodes are loaded
+    if sample_dataset.meta.episodes is None:
+        sample_dataset.meta.episodes = load_episodes(sample_dataset.root)
+
+    original_length = sample_dataset.meta.episodes[0]["length"]
+
+    result = trim_episode(sample_dataset, episode_index=0, trim_start_s=0, trim_end_s=0)
+
+    assert result is sample_dataset
+    assert sample_dataset.meta.episodes[0]["length"] == original_length
+
+
+def test_trim_episode_in_place(sample_dataset):
+    """Test that trim_episode modifies the dataset in-place."""
+    original_root = sample_dataset.root
+
+    result = trim_episode(sample_dataset, episode_index=0, trim_start_s=0.1)
+
+    # Should return same instance
+    assert result is sample_dataset
+    assert result.root == original_root
+
+
+def test_trim_episode_reloadable(sample_dataset):
+    """Test that dataset can be reloaded after trimming."""
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    repo_id = sample_dataset.repo_id
+    root = sample_dataset.root
+
+    trim_episode(sample_dataset, episode_index=0, trim_start_s=0.1)
+
+    # Reload dataset from disk
+    with (
+        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
+    ):
+        mock_get_safe_version.return_value = "v3.0"
+        mock_snapshot_download.return_value = str(root)
+
+        reloaded = LeRobotDataset(repo_id, root=root)
+
+    # Should be able to access data
+    assert len(reloaded) > 0
+    item = reloaded[0]
+    assert "action" in item
+
+
+def test_trim_episode_with_video(tmp_path):
+    """Test trimming an episode from a video dataset."""
+    from lerobot.datasets.io_utils import load_episodes
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    # Load pusht which has videos
+    source_dataset = LeRobotDataset("lerobot/pusht", episodes=[0, 1])
+
+    # Copy dataset to tmp_path so we can modify it
+    import shutil
+
+    test_root = tmp_path / "pusht_test"
+    shutil.copytree(source_dataset.root, test_root)
+
+    with (
+        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
+    ):
+        mock_get_safe_version.return_value = "v3.0"
+        mock_snapshot_download.return_value = str(test_root)
+
+        dataset = LeRobotDataset("lerobot/pusht", root=test_root)
+
+    # Ensure it has videos
+    assert len(dataset.meta.video_keys) > 0, "Test requires a video dataset"
+
+    # Load episodes metadata
+    if dataset.meta.episodes is None:
+        dataset.meta.episodes = load_episodes(dataset.root)
+
+    original_length = dataset.meta.episodes[0]["length"]
+    original_total_frames = dataset.meta.total_frames
+
+    # Trim 0.5 seconds from start of episode 0
+    trim_duration = 0.5
+    frames_to_trim = int(trim_duration * dataset.fps)
+
+    trim_episode(dataset, episode_index=0, trim_start_s=trim_duration)
+
+    # Reload to see changes
+    dataset.meta.episodes = load_episodes(dataset.root)
+
+    # Verify episode was trimmed
+    new_length = dataset.meta.episodes[0]["length"]
+    assert new_length == original_length - frames_to_trim
+    assert dataset.meta.total_frames == original_total_frames - frames_to_trim
+
+    # Verify video timestamps were updated
+    video_key = dataset.meta.video_keys[0]
+    from_ts = dataset.meta.episodes[0][f"videos/{video_key}/from_timestamp"]
+    assert from_ts == 0.0, "Video should start at timestamp 0 after trimming"
+
+    # Verify video file exists and is valid
+    video_path = dataset.root / dataset.meta.get_video_file_path(0, video_key)
+    assert video_path.exists(), "Video file should still exist after trimming"
+
+    # Cleanup
+    shutil.rmtree(test_root)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# add_features_inplace — schema-additive in-place column add
+# ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def small_dataset_no_video(tmp_path, empty_lerobot_dataset_factory):
+    """Tiny in-memory dataset (no images/video) for fast in-place add tests."""
+    features = {
+        "action": {"dtype": "float32", "shape": (2,), "names": None},
+        "observation.state": {"dtype": "float32", "shape": (2,), "names": None},
+    }
+    dataset = empty_lerobot_dataset_factory(
+        root=tmp_path / "small_ds",
+        features=features,
+    )
+    for _ in range(2):
+        for _ in range(5):
+            dataset.add_frame(
+                {
+                    "action": np.zeros(2, dtype=np.float32),
+                    "observation.state": np.zeros(2, dtype=np.float32),
+                    "task": "t",
+                }
+            )
+        dataset.save_episode()
+    dataset.finalize()
+    return dataset
+
+
+def test_add_features_inplace_per_frame_reward(small_dataset_no_video, tmp_path):
+    """Adding a per-frame `reward` rewrites parquet shards in place; videos untouched."""
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    data_files_before = sorted((ds.root / "data").rglob("*.parquet"))
+    assert data_files_before, "test setup expected at least one parquet shard"
+
+    add_features_inplace(
+        ds,
+        features={"reward": (0.0, {"dtype": "float32", "shape": [1], "names": None})},
+    )
+
+    # Schema reload: reward in features.
+    assert "reward" in ds.meta.features
+    assert ds.meta.features["reward"]["dtype"] == "float32"
+
+    # Every parquet shard now has a `reward` column with all 0.0.
+    for f in (ds.root / "data").rglob("*.parquet"):
+        table = pq.read_table(f)
+        assert "reward" in table.column_names, f"reward missing from {f}"
+        col = table.column("reward").to_pylist()
+        assert all(v == 0.0 for v in col), f"non-zero values in {f}: {col[:5]}"
+
+    # No .tmp orphans.
+    assert not list(ds.root.rglob("*.tmp")), "orphan .tmp files left over"
+
+
+def test_add_features_inplace_per_episode_success(small_dataset_no_video):
+    """Per-episode int8 success: per_episode hint preserved, fill applied."""
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    add_features_inplace(
+        ds,
+        features={
+            "success": (0, {"dtype": "int8", "shape": [1], "names": None, "per_episode": True}),
+        },
+    )
+
+    assert ds.meta.features["success"].get("per_episode") is True
+    assert ds.meta.features["success"]["dtype"] == "int8"
+
+    for f in (ds.root / "data").rglob("*.parquet"):
+        table = pq.read_table(f)
+        assert "success" in table.column_names
+        assert all(v == 0 for v in table.column("success").to_pylist())
+
+
+@pytest.mark.parametrize(
+    "name,info,fragment",
+    [
+        ("action", {"dtype": "float32", "shape": [1], "names": None}, "already exists"),
+        ("timestamp", {"dtype": "float32", "shape": [1], "names": None}, "DEFAULT_FEATURE"),
+        ("ok_name", {"dtype": "float32"}, "must include keys"),  # missing shape
+        ("ok_name", {"dtype": "float32", "shape": []}, "positive ints"),
+        ("ok_name", {"dtype": "float32", "shape": [1], "per_episode": "yes"}, "must be a bool"),
+    ],
+)
+def test_add_features_inplace_validation(small_dataset_no_video, name, info, fragment):
+    """Each rejection case raises ValueError with a recognizable message."""
+    with pytest.raises(ValueError, match=fragment):
+        add_features_inplace(small_dataset_no_video, features={name: (0.0, info)})
+
+
+def test_add_features_inplace_empty_dict_rejected(small_dataset_no_video):
+    with pytest.raises(ValueError, match="empty"):
+        add_features_inplace(small_dataset_no_video, features={})
+
+
+def test_add_features_inplace_preserves_declared_dtype(small_dataset_no_video):
+    """Declared dtype lands on disk verbatim — no float32→double drift."""
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    add_features_inplace(
+        ds,
+        features={
+            "f32_col": (0.0, {"dtype": "float32", "shape": [1], "names": None}),
+            "i8_col": (0, {"dtype": "int8", "shape": [1], "names": None}),
+            "i64_col": (0, {"dtype": "int64", "shape": [1], "names": None}),
+            "bool_col": (False, {"dtype": "bool", "shape": [1], "names": None}),
+        },
+    )
+    for f in (ds.root / "data").rglob("*.parquet"):
+        table = pq.read_table(f)
+        assert str(table.schema.field("f32_col").type) == "float", (
+            f"f32_col got {table.schema.field('f32_col').type}, expected float"
+        )
+        assert str(table.schema.field("i8_col").type) == "int8", (
+            f"i8_col got {table.schema.field('i8_col').type}, expected int8"
+        )
+        assert str(table.schema.field("i64_col").type) == "int64"
+        assert str(table.schema.field("bool_col").type) == "bool"
+
+
+def test_add_features_inplace_recomputes_stats(small_dataset_no_video):
+    """After add, stats columns for the new feature exist in episodes parquet."""
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    add_features_inplace(
+        ds,
+        features={"reward": (0.0, {"dtype": "float32", "shape": [1], "names": None})},
+    )
+
+    eps_dir = ds.root / "meta" / "episodes"
+    eps_files = list(eps_dir.rglob("*.parquet"))
+    assert eps_files, "no episodes metadata files found"
+    table = pq.read_table(eps_files[0])
+    cols = set(table.column_names)
+    reward_stat_cols = [c for c in cols if c.startswith("stats/reward/")]
+    assert reward_stat_cols, f"no stats/reward/* columns in {cols}"
+
+
+def test_rename_features_inplace_renames_data_columns(small_dataset_no_video):
+    """Renaming a column updates parquet shards in place; videos untouched.
+
+    Uses a non-recorded custom feature — recorded features (action /
+    observation.*) are guarded by the rename in-place primitive itself
+    and have a dedicated validation test.
+    """
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    add_features_inplace(ds, features={"to_rename": (0.0, {"dtype": "float32", "shape": [1], "names": None})})
+    rename_features_inplace(ds, renames={"to_rename": "renamed"})
+
+    assert "renamed" in ds.meta.features
+    assert "to_rename" not in ds.meta.features
+
+    for f in (ds.root / "data").rglob("*.parquet"):
+        cols = pq.read_table(f).column_names
+        assert "renamed" in cols and "to_rename" not in cols
+
+
+def test_rename_features_inplace_migrates_stats_columns(small_dataset_no_video):
+    """Stats columns under stats/<old>/* are renamed to stats/<new>/*."""
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    add_features_inplace(ds, features={"to_rename": (0.0, {"dtype": "float32", "shape": [1], "names": None})})
+    rename_features_inplace(ds, renames={"to_rename": "renamed"})
+
+    eps_dir = ds.root / "meta" / "episodes"
+    for f in eps_dir.rglob("*.parquet"):
+        cols = pq.read_table(f).column_names
+        assert any(c.startswith("stats/renamed/") for c in cols)
+        assert not any(c.startswith("stats/to_rename/") for c in cols)
+
+
+def test_rename_features_inplace_applies_spec_overrides(small_dataset_no_video):
+    """spec_overrides are merged into the renamed feature's spec in info.json."""
+    import json
+
+    ds = small_dataset_no_video
+    add_features_inplace(ds, features={"to_rename": (0.0, {"dtype": "float32", "shape": [1], "names": None})})
+    rename_features_inplace(
+        ds,
+        renames={"to_rename": "renamed"},
+        spec_overrides={"renamed": {"per_episode": False}},
+    )
+    with open(ds.root / "meta" / "info.json") as f:
+        info = json.load(f)
+    assert info["features"]["renamed"].get("per_episode") is False
+
+
+@pytest.mark.parametrize(
+    "renames,fragment",
+    [
+        ({}, "empty"),
+        ({"missing_feature": "new_name"}, "not found"),
+        ({"observation.state": "action"}, "already exists"),
+        ({"observation.state": "timestamp"}, "DEFAULT_FEATURES"),
+        ({"timestamp": "ts2"}, "DEFAULT_FEATURES"),
+        # Recorded sensor / control data is not renameable in-place — the
+        # forked rename_feature() exists for the rare case where a user
+        # really needs this. Both source-side ("observation.state") and
+        # destination-side ("foo" → "action" or "observation.X") are blocked.
+        ({"observation.state": "obs_renamed"}, "recorded"),
+    ],
+)
+def test_rename_features_inplace_validation(small_dataset_no_video, renames, fragment):
+    with pytest.raises(ValueError, match=fragment):
+        rename_features_inplace(small_dataset_no_video, renames=renames)
+
+
+def test_remove_features_inplace_drops_data_columns(small_dataset_no_video):
+    """remove_features_inplace drops the column from data + stats + info.json."""
+    import json
+
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    # First add a column we can then remove.
+    add_features_inplace(
+        ds,
+        features={"to_drop": (0.0, {"dtype": "float32", "shape": [1], "names": None})},
+    )
+    assert "to_drop" in ds.meta.features
+
+    remove_features_inplace(ds, names="to_drop")
+
+    assert "to_drop" not in ds.meta.features
+    for f in (ds.root / "data").rglob("*.parquet"):
+        assert "to_drop" not in pq.read_table(f).column_names
+    eps_dir = ds.root / "meta" / "episodes"
+    for f in eps_dir.rglob("*.parquet"):
+        cols = pq.read_table(f).column_names
+        assert not any(c.startswith("stats/to_drop/") for c in cols)
+    with open(ds.root / "meta" / "info.json") as f:
+        info = json.load(f)
+    assert "to_drop" not in info["features"]
+
+
+@pytest.mark.parametrize(
+    "name,fragment",
+    [
+        ("missing_feature", "not found"),
+        ("timestamp", "DEFAULT_FEATURE"),
+        # Recorded data: action / observation.* are off-limits because
+        # downstream training / eval / stats pipelines depend on them.
+        ("action", "recorded"),
+        ("observation.state", "recorded"),
+    ],
+)
+def test_remove_features_inplace_validation(small_dataset_no_video, name, fragment):
+    with pytest.raises(ValueError, match=fragment):
+        remove_features_inplace(small_dataset_no_video, names=name)
+
+
+def test_remove_features_inplace_empty_list_rejected(small_dataset_no_video):
+    with pytest.raises(ValueError, match="empty"):
+        remove_features_inplace(small_dataset_no_video, names=[])
+
+
+def test_sweep_orphan_tmp_shards(tmp_path):
+    """Orphan .tmp files left from a crashed save are cleaned up."""
+    data_dir = tmp_path / "ds" / "data" / "chunk-000"
+    data_dir.mkdir(parents=True)
+    (data_dir / "file-000.parquet").write_text("not real parquet")
+    (data_dir / "file-000.parquet.tmp").write_text("orphan")
+    (data_dir / "file-001.parquet.tmp").write_text("orphan")
+    info_dir = tmp_path / "ds" / "meta"
+    info_dir.mkdir(parents=True)
+    (info_dir / "info.json").write_text("{}")
+    (info_dir / "info.json.tmp").write_text("orphan")
+
+    removed = _sweep_orphan_tmp_shards(tmp_path / "ds")
+    assert removed == 3
+    assert not list((tmp_path / "ds").rglob("*.tmp"))
+    # Real files untouched.
+    assert (data_dir / "file-000.parquet").exists()
+    assert (info_dir / "info.json").exists()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Crash-recovery / atomicity for add_features_inplace
+# Tracked as I2 in src/lerobot/gui/docs/add_feature_review.md.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_add_features_inplace_info_json_replace_failure_is_atomic(monkeypatch, small_dataset_no_video):
+    """If the FINAL os.replace (info.json) fails, the dataset must be left
+    in its ORIGINAL pre-call state — neither the data shards nor info.json
+    should reflect the partial change.
+
+    The atomicity guarantee comes from _atomic_swap_files, which hardlinks
+    each dst → .bak before replacing, then restores from .bak on any
+    failure during the swap loop.
+    """
+    import os
+
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    real_replace = os.replace
+
+    def flaky_replace(src, dst, *args, **kwargs):
+        # Fail only when renaming info.json.tmp → info.json. Data-shard
+        # renames (which happen earlier) succeed normally.
+        if str(src).endswith("info.json.tmp"):
+            raise OSError("simulated crash on info.json swap")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr("lerobot.datasets.dataset_tools.os.replace", flaky_replace)
+
+    with pytest.raises(OSError, match="simulated crash"):
+        add_features_inplace(
+            ds,
+            features={
+                "to_persist": (0.0, {"dtype": "float32", "shape": [1], "names": None}),
+            },
+        )
+
+    # Atomicity: data shards must NOT carry the new column when the
+    # info.json swap failed — the function should have rolled back.
+    for f in (ds.root / "data").rglob("*.parquet"):
+        cols = pq.read_table(f).column_names
+        assert "to_persist" not in cols, (
+            f"data shard {f} still has new column after info.json failure (desync)"
+        )
+
+    # info.json: also unchanged.
+    import json
+
+    with (ds.root / "meta" / "info.json").open() as f:
+        info_on_disk = json.load(f)
+    assert "to_persist" not in info_on_disk["features"]
+
+
+def test_add_features_inplace_partial_data_shard_rename_is_atomic(
+    monkeypatch, tmp_path, empty_lerobot_dataset_factory
+):
+    """If os.replace fails partway through Pass 2 (the data-shard rename
+    loop), the dataset must be left in its ORIGINAL pre-call state — either
+    every shard has the new column or none do, never a mix.
+
+    The atomicity guarantee comes from _atomic_swap_files, which restores
+    every successfully-swapped dst from its .bak hardlink when any later
+    swap raises.
+
+    Forces a multi-shard dataset by post-copying the lone parquet from the
+    factory output (which produces 1 shard for tiny test datasets).
+    """
+    import os
+    import shutil
+
+    import pyarrow.parquet as pq
+
+    # Build a single-shard dataset, then fork the lone parquet into a second
+    # shard so we have ≥2 in pending_renames. The shards aren't required to
+    # have valid lerobot-format relationships for this test — we only care
+    # about the rename loop's behavior.
+    features = {
+        "action": {"dtype": "float32", "shape": (2,), "names": None},
+        "observation.state": {"dtype": "float32", "shape": (2,), "names": None},
+    }
+    ds = empty_lerobot_dataset_factory(root=tmp_path / "ds", features=features)
+    for _ in range(4):
+        ds.add_frame(
+            {
+                "action": np.zeros(2, dtype=np.float32),
+                "observation.state": np.zeros(2, dtype=np.float32),
+                "task": "t",
+            }
+        )
+    ds.save_episode()
+    ds.finalize()
+
+    # Duplicate the lone shard so the writer sees two parquets to rewrite.
+    shards_before = sorted((ds.root / "data").rglob("*.parquet"))
+    assert len(shards_before) == 1, f"factory unexpectedly produced {len(shards_before)} shards; adjust test"
+    forked = shards_before[0].with_name("file-001.parquet")
+    shutil.copy2(shards_before[0], forked)
+
+    real_replace = os.replace
+    n_data_replaces = [0]
+
+    def flaky_replace(src, dst, *args, **kwargs):
+        # Don't fail the info.json swap — the failure is mid Pass 2.
+        if str(src).endswith("info.json.tmp"):
+            return real_replace(src, dst, *args, **kwargs)
+        n_data_replaces[0] += 1
+        if n_data_replaces[0] == 2:
+            raise OSError("simulated crash mid Pass 2")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr("lerobot.datasets.dataset_tools.os.replace", flaky_replace)
+
+    with pytest.raises(OSError, match="simulated crash"):
+        add_features_inplace(ds, features={"split": (0.0, {"dtype": "float32", "shape": [1], "names": None})})
+
+    # Atomicity: every shard must agree on whether the column exists. The
+    # rollback path either restores all originals or completes all renames;
+    # mixed state is corruption.
+    shards_after = sorted((ds.root / "data").rglob("*.parquet"))
+    has_split = [("split" in pq.read_table(s).column_names) for s in shards_after]
+    # Expected after a transactional rollback: NO shard has the column
+    # (function raised, so the column wasn't supposed to land).
+    assert not any(has_split), (
+        f"shards have inconsistent or partially-applied schema: {has_split}. "
+        "Atomicity requires the rollback to revert successful renames."
+    )
+    # No orphan tmps either — they should be cleaned by the rollback.
+    tmps = list((ds.root / "data").rglob("*.tmp"))
+    assert not tmps, f"orphan .tmp files left after rollback: {tmps}"
 
 
 @require_libsvtav1

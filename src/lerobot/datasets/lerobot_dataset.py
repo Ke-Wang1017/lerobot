@@ -65,6 +65,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         encoder_threads: int | None = None,
         streaming_encoding: bool = False,
         encoder_queue_maxsize: int = 30,
+        record_images: bool = True,
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -214,6 +215,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self._depth_output_unit = depth_output_unit
         self._batch_encoding_size = batch_encoding_size
         self._encoder_threads = encoder_threads
+        self._record_images = record_images
 
         if self._requested_root is not None:
             self._requested_root.mkdir(exist_ok=True, parents=True)
@@ -253,6 +255,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             delta_timestamps=delta_timestamps,
             image_transforms=image_transforms,
             return_uint8=self._return_uint8,
+            record_images=record_images,
             depth_output_unit=self._depth_output_unit,
         )
         self.image_transforms = image_transforms
@@ -324,6 +327,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 delta_timestamps=self.delta_timestamps,
                 image_transforms=self.image_transforms,
                 return_uint8=self._return_uint8,
+                record_images=getattr(self, "_record_images", True),
                 depth_output_unit=self._depth_output_unit,
             )
         return self.reader
@@ -679,6 +683,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         streaming_encoding: bool = False,
         encoder_queue_maxsize: int = 30,
         encoder_threads: int | None = None,
+        record_images: bool = True,
+        use_per_camera_streaming: bool | None = None,
         video_files_size_in_mb: int | None = None,
         data_files_size_in_mb: int | None = None,
     ) -> "LeRobotDataset":
@@ -755,6 +761,18 @@ class LeRobotDataset(torch.utils.data.Dataset):
             streaming_enc = cls._build_streaming_encoder(
                 fps, rgb_encoder, depth_encoder, encoder_queue_maxsize, encoder_threads
             )
+        # Default: per-camera streaming on (HEAD's behavior). Disabled when upstream's
+        # multi-camera streaming_encoding is explicitly True, or when batched/no-images.
+        if use_per_camera_streaming is None:
+            # The fork's per-camera streaming encoder (OurStreamingVideoEncoder) only
+            # encodes RGB; depth maps need upstream's depth-aware path, so fall back to
+            # standard encoding whenever the dataset has depth keys.
+            use_per_camera_streaming = (
+                not streaming_encoding
+                and record_images
+                and batch_encoding_size == 1
+                and not obj.meta.depth_keys
+            )
         obj.writer = DatasetWriter(
             meta=obj.meta,
             root=obj.root,
@@ -763,9 +781,12 @@ class LeRobotDataset(torch.utils.data.Dataset):
             encoder_threads=encoder_threads,
             batch_encoding_size=batch_encoding_size,
             streaming_encoder=streaming_enc,
+            record_images=record_images,
+            use_per_camera_streaming=use_per_camera_streaming,
         )
+        obj._record_images = record_images
 
-        if image_writer_processes or image_writer_threads:
+        if record_images and (image_writer_processes or image_writer_threads):
             obj.writer.start_image_writer(image_writer_processes, image_writer_threads)
 
         obj._is_finalized = False
@@ -789,6 +810,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         image_writer_threads: int = 0,
         streaming_encoding: bool = False,
         encoder_queue_maxsize: int = 30,
+        record_images: bool = True,
+        use_per_camera_streaming: bool | None = None,
     ) -> "LeRobotDataset":
         """Resume recording on an existing dataset.
 
@@ -864,6 +887,17 @@ class LeRobotDataset(torch.utils.data.Dataset):
             streaming_enc = cls._build_streaming_encoder(
                 obj.meta.fps, rgb_encoder, depth_encoder, encoder_queue_maxsize, encoder_threads
             )
+        # Default: per-camera streaming on, unless upstream's streaming_encoding flag is set.
+        if use_per_camera_streaming is None:
+            # The fork's per-camera streaming encoder (OurStreamingVideoEncoder) only
+            # encodes RGB; depth maps need upstream's depth-aware path, so fall back to
+            # standard encoding whenever the dataset has depth keys.
+            use_per_camera_streaming = (
+                not streaming_encoding
+                and record_images
+                and batch_encoding_size == 1
+                and not obj.meta.depth_keys
+            )
         obj.writer = DatasetWriter(
             meta=obj.meta,
             root=obj.root,
@@ -873,9 +907,12 @@ class LeRobotDataset(torch.utils.data.Dataset):
             batch_encoding_size=batch_encoding_size,
             streaming_encoder=streaming_enc,
             initial_frames=obj.meta.total_frames,
+            record_images=record_images,
+            use_per_camera_streaming=use_per_camera_streaming,
         )
+        obj._record_images = record_images
 
-        if image_writer_processes or image_writer_threads:
+        if record_images and (image_writer_processes or image_writer_threads):
             obj.writer.start_image_writer(image_writer_processes, image_writer_threads)
 
         obj._is_finalized = False

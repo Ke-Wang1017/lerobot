@@ -149,6 +149,7 @@ pygame-dep = ["pygame>=2.5.1,<2.7.0"]
 # fails at load with "liburdfdom_sensor.so.4.0: cannot open shared object file" (see #3755).
 # There is no cmeel-urdfdom 5.x; <5 selects the 4.x ABI the placo/pin wheels are built against.
 placo-dep = ["placo>=0.9.6,<0.9.16", "cmeel-urdfdom>=4,<5", "cmeel-tinyxml2<11"]
+pink-dep = ["pin-pink>=4.2,<5", "qpsolvers[proxqp]>=4.12,<5"]
 transformers-dep = ["transformers>=5.4.0,<5.6.0"]
 grpcio-dep = ["grpcio>=1.73.1,<2.0.0", "protobuf>=6.31.1,<8.0.0"]
 accelerate-dep = ["accelerate>=1.14.0,<2.0.0"]
@@ -196,12 +197,16 @@ reachy2 = [
 # Seeed Studio reBot B601-DM follower (motorbridge / CAN) + StarArm102 / reBot Arm 102
 # leader (motorbridge-smart-servo / FashionStar UART servos).
 rebot = ["lerobot[motorbridge-dep]", "lerobot[motorbridge-smart-servo-dep]"]
-kinematics = ["lerobot[placo-dep]"]
+kinematics = ["lerobot[placo-dep]", "lerobot[pink-dep]"]
 intelrealsense = [
     "pyrealsense2>=2.55.1.6486,<2.57.0 ; sys_platform != 'darwin'",
     "pyrealsense2-macosx>=2.54,<2.57.0 ; sys_platform == 'darwin'",
 ]
 phone = ["hebi-py>=2.8.0,<2.12.0", "teleop>=0.1.0,<0.2.0", "fastapi<1.0", "lerobot[scipy-dep]"]
+# Quest 3 WebXR teleop (fork-only). aiohttp serves the WebXR page over a
+# daemon-thread HTTPS server; the Cartesian IK a robot installs for this
+# teleop in attach_teleop needs pin-pink (see lerobot[pink-dep]).
+quest-vr = ["aiohttp>=3.9,<4.0", "lerobot[pink-dep]"]
 
 # Policies
 diffusion = ["lerobot[diffusers-dep]"]
@@ -238,10 +243,46 @@ evo1 = ["lerobot[transformers-dep]"]
 hilserl = ["lerobot[transformers-dep]", "lerobot[dataset]", "gym-hil>=0.1.14,<0.2.0", "lerobot[grpcio-dep]", "lerobot[placo-dep]"]
 vla_jepa = ["lerobot[transformers-dep]", "lerobot[diffusers-dep]", "lerobot[qwen-vl-utils-dep]"]
 lingbot_va = ["lerobot[transformers-dep]", "lerobot[diffusers-dep]", "lerobot[accelerate-dep]"]
+# HVLA (fork-only). Imported under src/lerobot/policies/hvla/. Mirrors what
+# transformers / matplotlib / sentencepiece / scikit-learn the modules
+# under that subtree actually `import`. Add `lerobot[hvla]` to your
+# install if you want to run HVLA training/inference.
+hvla = [
+    "lerobot[transformers-dep]",
+    "lerobot[matplotlib-dep]",
+    "sentencepiece>=0.2.0,<1.0.0",
+    "scikit-learn>=1.5.0,<2.0.0",
+]
 
 # Features
 async = ["lerobot[grpcio-dep]", "lerobot[matplotlib-dep]"]
 peft = ["lerobot[transformers-dep]", "lerobot[peft-dep]"]
+# GUI (fork-only). pydantic is already pulled in transitively by fastapi
+# but is imported directly under src/lerobot/gui/api/, so declare it
+# explicitly — keeps the install resilient if fastapi ever swaps backend.
+gui = [
+    "fastapi>=0.115.0,<1.0.0",
+    "uvicorn>=0.30.0,<1.0.0",
+    "python-multipart>=0.0.9,<1.0.0",
+    "lerobot[mcp]",  # gui/server.py unconditionally mounts the MCP app
+    # `websockets` is needed for uvicorn's WS upgrade path. Used by the
+    # bridge channel (gui/api/bridge.py) — without it, /api/bridge/ws
+    # returns 404 even though the route is registered.
+    "websockets>=13.0,<17.0",
+    "pydantic>=2.0.0,<3.0.0",
+    # mDNS so the GUI is reachable as http://lerobot.local:<port>/ from any
+    # device on the LAN without having to know the host's IP. Optional at
+    # runtime — gui/mdns.py is import-guarded — but listing it here makes
+    # `pip install lerobot[gui]` produce a working "open from phone" setup.
+    "zeroconf>=0.130,<1.0",
+]
+# MCP (fork-only). Exposes datasets to AI agents via the Model Context
+# Protocol. Server lives under src/lerobot/mcp/ and runs over stdio; install
+# alongside [dataset] for full functionality (dataset reads + video decode).
+mcp = [
+    "lerobot[dataset]",
+    "mcp>=1.2.0,<2.0.0",
+]
 
 # Annotation pipeline (lerobot-annotate). The only backend is ``openai``,
 # which talks to any OpenAI-compatible server (``vllm serve`` /
@@ -259,9 +300,12 @@ annotations = [
 ]
 
 # Development
-dev = ["pre-commit>=3.7.0,<5.0.0", "debugpy>=1.8.1,<1.9.0", "lerobot[grpcio-dep]", "grpcio-tools>=1.73.1,<2.0.0", "mypy>=1.19.1", "ruff>=0.14.1", "lerobot[notebook]"]
+dev = ["pre-commit>=3.7.0,<5.0.0", "debugpy>=1.8.1,<1.9.0", "lerobot[grpcio-dep]", "grpcio-tools>=1.73.1,<2.0.0", "mypy>=1.19.1", "ruff>=0.14.1,<0.15", "lerobot[notebook]"]
 notebook = ["jupyter>=1.0.0,<2.0.0", "ipykernel>=6.0.0,<7.0.0"]
-test = ["pytest>=8.1.0,<9.0.0", "pytest-timeout>=2.4.0,<3.0.0", "pytest-cov>=5.0.0,<8.0.0", "mock-serial>=0.0.1,<0.1.0 ; sys_platform != 'win32'"]
+# pytest-asyncio: the fork's GUI/MCP suites (tests/gui/training/test_probe.py,
+# tests/mcp/test_auth.py) use @pytest.mark.asyncio; without the plugin those
+# tests fail collection-side with "async def functions are not natively supported".
+test = ["pytest>=8.1.0,<9.0.0", "pytest-timeout>=2.4.0,<3.0.0", "pytest-cov>=5.0.0,<8.0.0", "pytest-asyncio>=0.24.0,<2.0.0", "mock-serial>=0.0.1,<0.1.0 ; sys_platform != 'win32'"]
 video_benchmark = ["scikit-image>=0.23.2,<0.26.0", "pandas>=2.2.2,<2.4.0"]
 
 # Simulation
@@ -322,6 +366,9 @@ all = [
     "lerobot[hilserl]",
     "lerobot[vla_jepa]",
     "lerobot[lingbot_va]",
+    "lerobot[hvla]",
+    "lerobot[gui]",
+    "lerobot[mcp]",
     "lerobot[async]",
     "lerobot[dev]",
     "lerobot[test]",
@@ -329,6 +376,7 @@ all = [
     "lerobot[aloha]",
     "lerobot[pusht]",
     "lerobot[phone]",
+    "lerobot[quest-vr]",
     "lerobot[libero]; sys_platform == 'linux'",
     "lerobot[metaworld]",
     "lerobot[sarm]",
@@ -337,6 +385,53 @@ all = [
     "lerobot[peft]",
     # "lerobot[unitree_g1]", TODO: Unitree requires specific installation instructions for unitree_sdk2
 ]
+
+# ─── Fork-only (TheWisp/lerobot) ──────────────────────────────────────────────
+# Single curated extras list for the training Docker image built by this
+# fork's CI (.github/workflows/docker_publish_fork_training.yml →
+# docker/Dockerfile.training). Centralises "what the training pod needs"
+# so the Dockerfile is just `uv sync --extra training-image` (one consumer,
+# one contract). Adding a new policy that the GUI form picker exposes
+# means appending one `lerobot[<extra>]` line below; the next CI image
+# build picks it up automatically.
+#
+# Deliberately a SEPARATE extra (not piggybacking on `all` or modifying
+# upstream `all`) so this is a single contained addition that's easy to
+# keep separate when rebasing on upstream. The Dockerfile then verifies
+# the image at build time by importing every registered policy — see
+# `lerobot.policies.factory.check_policy_registry_health()`.
+#
+# Skipped from this list:
+#   - hardware/feetech/dynamixel/intelrealsense — no robot on the pod
+#   - libero/metaworld — heavy, infrequently used, need cmake (mujoco)
+#   - dev/test/notebook — not needed in a deployment image
+#   - groot — needs flash-attn with platform-specific install
+training-image = [
+    "lerobot[dataset]",
+    "lerobot[training]",
+    "lerobot[pusht]",
+    # Every policy the GUI form picker exposes today (transitively pulls
+    # transformers/diffusers/num2words/accelerate/etc. — the deps that
+    # previously had to be enumerated --extra-by-extra in the Dockerfile).
+    "lerobot[diffusion]",
+    "lerobot[hvla]",
+    "lerobot[hilserl]",      # gates SAC policy + RL env
+    "lerobot[multi_task_dit]",
+    "lerobot[pi]",           # covers pi0, pi05, pi0_fast
+    "lerobot[sarm]",
+    "lerobot[smolvla]",
+    "lerobot[wallx]",
+    "lerobot[xvla]",
+]
+
+# Nebius Ephemeral-host provider (GUI server only). Deliberately NOT in
+# `training-image`: the SDK provisions/destroys VMs from the GUI server's
+# box; it has no place inside the training container that runs ON the
+# provisioned pod. nebius itself only caps protobuf>=5.29.1, but `wandb`
+# (via [training]) and grpcio-tools both cap protobuf<7, so a GUI server
+# with both extras resolves protobuf to 6.x — compatible all round
+# (verified 2026-06-15 on protobuf 6.33).
+nebius = ["nebius>=0.3,<0.4"]
 
 [project.scripts]
 lerobot-calibrate="lerobot.scripts.lerobot_calibrate:main"
@@ -357,6 +452,8 @@ lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
 lerobot-setup-can="lerobot.scripts.lerobot_setup_can:main"
 lerobot-annotate="lerobot.scripts.lerobot_annotate:main"
 lerobot-rollout="lerobot.scripts.lerobot_rollout:main"
+lerobot-mcp="lerobot.mcp.cli:main"
+lerobot-gui="lerobot.gui.server:main"
 
 # ---------------- Tool Configurations ----------------
 
@@ -375,6 +472,9 @@ torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
 
 [tool.setuptools.package-data]
 lerobot = ["envs/*.json", "annotations/steerable_pipeline/prompts/*.txt"]
+"lerobot.gui" = ["static/*.html", "static/*.css", "static/*.js"]
+"lerobot.robots.so101_description" = ["urdf/*.urdf", "meshes/*.stl"]
+"lerobot.robots.so107_description" = ["urdf/*.urdf", "meshes/*.stl"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -414,6 +514,29 @@ ignore = [
 # E402: conditional-import guards (TYPE_CHECKING / is_package_available) must precede the imports they protect
 "src/lerobot/scripts/convert_dataset_v21_to_v30.py" = ["E402"]
 "src/lerobot/policies/wall_x/**" = ["N801", "N812", "SIM102", "SIM108", "SIM210", "SIM211", "B006", "B007", "SIM118"] # Supprese these as they are coming from original Qwen2_5_vl code TODO(pepijn): refactor original
+# HVLA / RLT / our research code uses ML-convention names: matrix vars X/Q/K/V/B/C, `import torch.nn.functional as F`, etc. Ruff's pep8-naming rules flag these as violations; consistent with how upstream handles wall_x, scope the same naming-rule allowlist to fork-only ML code. Also allow E702/E741 in research scripts which routinely chain plot setup statements (`ax.set_xlabel(...); ax.set_ylabel(...)`) and use `l` for list-comp temporaries. SIM102/SIM108 disabled because nested-if and if-else carry expository comments that ternary forms can't.
+"src/lerobot/policies/hvla/**" = ["N801", "N802", "N803", "N806", "N812", "E702", "E741", "SIM102", "SIM108"]
+"tests/hvla/**" = ["N802", "N803", "N806", "N812", "E402", "E741", "B017"]
+# Kinematics code uses math-convention matrix names (SE(3) `T`, rotation `R`).
+"src/lerobot/model/pink_kinematics.py" = ["N806"]
+"tests/model/test_pink_kinematics.py" = ["N806", "N817"]
+# Tests routinely use nested `with patch(...)` blocks (one mock per line is more readable than one combined `with (a, b, c, d):`), and try/except/pass for "raising is fine" assertions. Mute these rules in tests broadly.
+"tests/**" = ["SIM117", "SIM105", "SIM113"]
+# Top-level research / inference scripts also use `F = torch.nn.functional` aliasing.
+"{chop,dual_system_infer,multistage_infer,openpi_infer}.py" = ["N812"]
+"scripts/**.py" = ["N812"]
+# Upstream-shared files where our merge state has not yet picked up upstream's
+# modernization commits (PEP 695 `type X = ...` aliases, generic functions/
+# classes, combined `if`s). Each rule below requires either an unsafe rewrite
+# or a structural change. We deliberately don't apply them here: a future
+# upstream sync will bring upstream's already-modernized version of the file
+# in, and re-doing the modernization ourselves diverges from upstream's style
+# and creates merge conflicts. Drop each entry once that file syncs from
+# upstream.
+"src/lerobot/cameras/realsense/camera_realsense.py" = ["SIM102"]
+"src/lerobot/motors/motors_bus.py" = ["UP007"]
+"src/lerobot/processor/pipeline.py" = ["UP046"]
+"src/lerobot/utils/io_utils.py" = ["UP007", "UP047"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
@@ -434,8 +557,28 @@ exclude_dirs = [
     "tests",
     "benchmarks",
     "src/lerobot/datasets/push_dataset_to_hub",
+    # Top-level research / inference scripts. They legitimately use
+    # subprocess shell=True for chained commands, hardcoded /tmp/ for
+    # frame dumps, and other patterns that are fine in a developer tool
+    # but flag a wall of bandit issues unrelated to library security.
+    "chop.py",
+    "dual_system_infer.py",
+    "multistage_infer.py",
+    "openpi_infer.py",
+    # Per-step analysis scripts: noisy bandit findings (subprocess for
+    # aplay, json/pickle from trusted local checkpoints) drown out the
+    # signal. The library code under src/lerobot/policies/hvla/ outside
+    # of `scripts/` IS still bandit-checked.
+    "src/lerobot/policies/hvla/scripts",
 ]
-skips = ["B101", "B311", "B404", "B603", "B615"]
+# B607 (partial executable path: xdg-open, aplay) is intentional — these
+# are standard Linux utilities meant to be found via PATH; hardcoding
+# /usr/bin/* would actually break on some distros. B614 (torch.load
+# without weights_only) is currently impractical to fix wholesale — many
+# of our checkpoints predate the weights_only=True default and the
+# loaders need updating; track in TODO. B110 (try/except/pass) is
+# intentional in our best-effort cleanup paths.
+skips = ["B101", "B311", "B404", "B603", "B607", "B614", "B110", "B615"]
 
 [tool.typos]
 default.extend-ignore-re = [
@@ -446,6 +589,7 @@ default.extend-ignore-identifiers-re = [
     # Add individual words here to ignore them
     "2nd",
     "pn",
+    "PN",  # uppercase: occurs in "PNGs" (file format) in async-video docs
     "ser",
     "ein",
     "thw",
@@ -454,6 +598,16 @@ default.extend-ignore-identifiers-re = [
     "is_compileable",
     "ROBOTIS",
     "OT_VALUE",
+    # Variable names for stacked batch tensors in HVLA optimization tests
+    # (`stacked_ba`, `features_ba`, "AB[0] should match BA[1]" comment).
+    "ba",
+    "BA",
+    # Compound English words appearing in code comments + docs:
+    # "mis-load" (test_rlt.py), "mis-time" (test_intervention.py).
+    "mis",
+    # Paper notation: `L_rto` is the RL Token reconstruction loss
+    # (Eq. 2 of the RLT paper). Spelled to match the paper.
+    "rto",
     "VanderBilt",
     "seperated_timestep",
 ]
@@ -481,6 +635,17 @@ default.extend-ignore-identifiers-re = [
 python_version = "3.12"
 ignore_missing_imports = true
 follow_imports = "skip"
+# Top-level research / inference scripts (chop, multistage_infer,
+# dual_system_infer, openpi_infer, scripts/train_act_vlm,
+# scripts/benchmark_training_speed) reference internal helpers that have
+# moved or use dynamic attributes on Callable. They're dev-only entry
+# points, not library code; keep mypy focused on src/lerobot/. The
+# strictly-typed modules (envs, configs, optim, model, cameras, motors,
+# transport) below are unaffected.
+exclude = [
+    "^(chop|multistage_infer|dual_system_infer|openpi_infer)\\.py$",
+    "^scripts/(train_act_vlm|benchmark_training_speed|extract_s2_latents)\\.py$",
+]
 # warn_return_any = true
 # warn_unused_configs = true
 # strict = true
@@ -562,3 +727,15 @@ ignore_errors = false
 # [[tool.mypy.overrides]]
 # module = "lerobot.scripts.*"
 # ignore_errors = false
+
+[tool.pytest.ini_options]
+# Exclude live-HF tests from default runs. They hit the real Hub, create
+# real throwaway repos under whoever's logged in via `huggingface-cli
+# login`, and take ~15s each. Opt in with `pytest -m hub_live` when you
+# actually want to exercise the live path.
+addopts = "-m 'not hub_live'"
+markers = [
+    "hub_live: Tests that hit the real HuggingFace Hub. Skipped by default; opt in with `pytest -m hub_live`. Require a logged-in HF token + network; tests auto-skip if not logged in. Repos go under the logged-in user's namespace as `_lerobot_hub_live_*` and are deleted on test exit.",
+    "requires_ssh_loopback: Tests that exercise the SshClient transport via ssh-to-127.0.0.1. Need sshd running on :22 + ssh/scp/tmux installed + a working keypair. Auto-skip if any prereq is missing. CI sets up sshd in the workflow; local dev needs `ssh-keygen` + a pubkey in `~/.ssh/authorized_keys` (the fixture handles this automatically).",
+    "requires_playwright: Browser-driven GUI tests. Need the `playwright` package + a chromium install (`playwright install chromium`). Auto-skip (importorskip / launch-skip) if either is missing.",
+]

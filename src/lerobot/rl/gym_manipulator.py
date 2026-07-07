@@ -93,6 +93,7 @@ class DatasetConfig:
     num_episodes_to_record: int = 5
     replay_episode: int | None = None
     push_to_hub: bool = False
+    resume: bool = False
 
 
 @dataclass
@@ -235,11 +236,10 @@ class RobotEnv(gym.Env):
         """
         # Reset the robot
         # self.robot.reset()
+        log_say("Reset the environment.", play_sounds=True)
         start_time = time.perf_counter()
         if self.reset_pose is not None:
-            log_say("Reset the environment.", play_sounds=True)
             reset_follower_position(self.robot, np.array(self.reset_pose))
-            log_say("Reset the environment done.", play_sounds=True)
 
         precise_sleep(max(self.reset_time_s - (time.perf_counter() - start_time), 0.0))
 
@@ -250,6 +250,7 @@ class RobotEnv(gym.Env):
         self.episode_data = None
         obs = self._get_observation()
         self._raw_joint_positions = {f"{key}.pos": obs[f"{key}.pos"] for key in self._joint_names}
+        log_say("Reset the environment done.", play_sounds=True)
         return obs, {TeleopEvents.IS_INTERVENTION: False}
 
     def step(self, action) -> tuple[RobotObservation, float, bool, bool, dict[str, Any]]:
@@ -574,6 +575,9 @@ def step_env_and_process_transition(
     # wins for `TeleopEvents` enum keys
     action_info = processed_action_transition[TransitionKey.INFO]
     new_info = info.copy()
+    # env wins for str keys (env.step returns the current-step gym-hil string keys
+    # like "is_intervention"; we keep those by starting from info.copy() and never
+    # overwriting them), action-processor wins for `TeleopEvents` enum keys.
     for key, value in action_info.items():
         if isinstance(key, TeleopEvents):
             new_info[key] = value
@@ -676,16 +680,28 @@ def control_loop(
                     "names": ["channels", "height", "width"],
                 }
 
-        # Create dataset
-        dataset = LeRobotDataset.create(
-            cfg.dataset.repo_id,
-            cfg.env.fps,
-            root=cfg.dataset.root,
-            use_videos=True,
-            image_writer_threads=4,
-            image_writer_processes=0,
-            features=features,
-        )
+        if cfg.dataset.resume:
+            # Resume recording on an existing dataset
+            num_cameras = (
+                len(env.robot.cameras) if hasattr(env, "robot") and hasattr(env.robot, "cameras") else 0
+            )
+            dataset = LeRobotDataset.resume(
+                cfg.dataset.repo_id,
+                root=cfg.dataset.root,
+                image_writer_processes=0,
+                image_writer_threads=4 * num_cameras if num_cameras > 0 else 0,
+            )
+        else:
+            # Create new dataset
+            dataset = LeRobotDataset.create(
+                cfg.dataset.repo_id,
+                cfg.env.fps,
+                root=cfg.dataset.root,
+                use_videos=True,
+                image_writer_threads=4,
+                image_writer_processes=0,
+                features=features,
+            )
 
     episode_idx = 0
     episode_step = 0

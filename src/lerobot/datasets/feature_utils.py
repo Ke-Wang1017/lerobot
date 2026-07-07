@@ -267,14 +267,82 @@ def validate_features_presence(actual_features: set[str], expected_features: set
     return error_message
 
 
+def is_categorical_feature(feature: dict) -> bool:
+    """True if ``feature`` declares a categorical-int contract.
+
+    A feature is categorical iff it's a *scalar* integer (shape ``[1]`` or
+    empty) with a non-empty ``names`` list. The on-disk value is the integer
+    index ``[0, len(names))``; the strings are display labels.
+
+    ``names`` for non-scalar features is the legacy *component-label*
+    convention (e.g. ``["x", "y", "z"]`` on a 3-vector position) and carries
+    no bounds semantics — this predicate returns False so vector features
+    aren't accidentally bounds-checked against ``[0, len(names))``.
+    """
+    names = feature.get("names")
+    if not isinstance(names, list) or not names:
+        return False
+    if not feature.get("dtype", "").startswith("int"):
+        return False
+    shape = feature.get("shape", [])
+    is_scalar = (len(shape) == 0) or (len(shape) == 1 and shape[0] == 1)
+    return is_scalar
+
+
+def is_per_episode_declared(feature: dict) -> bool:
+    """True iff ``feature`` declares ``per_episode: true`` in info.json.
+
+    The flag is the writer's *intent*: every frame in any given episode
+    carries the same value for this feature. Layout doesn't change — the
+    column is still per-frame in ``data/chunk-*/file-*.parquet`` — but
+    the GUI surfaces it as episode-wide and the writer enforces uniformity
+    at ``add_frame`` time.
+
+    Distinct from the GUI's runtime detector (which scans data for
+    uniformity); see :func:`lerobot.gui.api.datasets._detect_per_episode_features`.
+    """
+    return feature.get("per_episode") is True
+
+
+def validate_per_episode_flag(name: str, feature: dict) -> str:
+    """Reject ``per_episode: true`` on features where it makes no sense.
+
+    Returns an error message (empty if valid). The flag is meaningful only
+    for *scalar* non-image/video features (shape ``[1]`` or empty). Vector
+    / matrix features can't reasonably broadcast across an episode (you'd
+    write the same vector to every frame, which is uncommon and easy to
+    misuse), and image/video are recorded per-frame by definition.
+    """
+    if not is_per_episode_declared(feature):
+        return ""
+    dtype = feature.get("dtype", "")
+    if dtype in ("image", "video"):
+        return (
+            f"Feature {name!r} declares per_episode=true but dtype={dtype!r}; "
+            f"image/video are recorded per-frame and cannot be per-episode.\n"
+        )
+    shape = feature.get("shape") or [1]
+    is_scalar = (len(shape) == 0) or (len(shape) == 1 and shape[0] == 1)
+    if not is_scalar:
+        return (
+            f"Feature {name!r} declares per_episode=true but shape={list(shape)} "
+            f"is not scalar; per_episode is only valid for shape [1] or [].\n"
+        )
+    return ""
+
+
 def validate_feature_dtype_and_shape(
     name: str, feature: dict, value: np.ndarray | PILImage.Image | str
 ) -> str:
-    """Validate the dtype and shape of a single feature's value.
+    """Validate the dtype, shape, and optional declared bounds of a single feature's value.
 
     Args:
         name (str): The name of the feature.
         feature (dict): The feature specification from the LeRobot features dictionary.
+            May include optional ``"min"`` / ``"max"`` (numeric scalars) for bounded
+            numeric features, and optional ``"names"`` (list[str]) for categorical
+            integer features. Both are honored when present and silently skipped
+            otherwise — backward compatible with v3 datasets that don't declare them.
         value: The value of the feature to validate.
 
     Returns:
@@ -286,7 +354,10 @@ def validate_feature_dtype_and_shape(
     expected_dtype = feature["dtype"]
     expected_shape = feature["shape"]
     if is_valid_numpy_dtype_string(expected_dtype):
-        return validate_feature_numpy_array(name, expected_dtype, expected_shape, value)
+        error = validate_feature_numpy_array(name, expected_dtype, expected_shape, value)
+        if error:
+            return error
+        return validate_feature_numeric_bounds(name, feature, value)
     elif expected_dtype in ["image", "video"]:
         return validate_feature_image_or_video(name, expected_shape, value)
     elif expected_dtype == "string":
@@ -295,6 +366,72 @@ def validate_feature_dtype_and_shape(
         return validate_feature_language(name, value)
     else:
         raise NotImplementedError(f"The feature dtype '{expected_dtype}' is not implemented yet.")
+
+
+def validate_feature_numeric_bounds(name: str, feature: dict, value: np.ndarray) -> str:
+    """Enforce optional declared ``min``/``max`` and categorical ``names`` on a value.
+
+    Both fields are *opt-in* — features without them validate identically to the
+    pre-extension behavior. When present:
+
+    * ``min`` / ``max`` (numeric) bound every component of ``value``. The
+      original use case is e.g. a 1-5 quality rating: declared ``min=1, max=5``
+      rejects 7 at ``add_frame`` time and at GUI stage time (since the GUI's
+      stage endpoint also funnels through this validator).
+    * ``names`` (list[str]) defines the legal categorical labels for a
+      *scalar* integer feature (shape ``[1]`` or empty). The on-disk value
+      is the integer index ``[0, len(names))``; anything outside is
+      rejected. ``control_mode`` with ``names=["ee", "joint"]`` is the
+      canonical case.
+
+      ``names`` for non-scalar features is the historical "component name"
+      list (e.g. ``["x", "y", "z"]`` on a 3-vector position), which carries
+      no bounds semantics — we deliberately don't trigger categorical
+      enforcement there to stay backward-compatible with existing datasets.
+
+    Vectors are checked element-wise for min/max; the first out-of-bounds
+    element produces the error.
+    """
+    min_bound = feature.get("min")
+    max_bound = feature.get("max")
+    if min_bound is not None and max_bound is not None:
+        # Pin invariant up front — silently swallowing min > max would let
+        # any value pass since the [min, max] window is empty.
+        assert min_bound <= max_bound, (
+            f"Feature '{name}' has declared min={min_bound!r} > max={max_bound!r} (invalid range)"
+        )
+    is_categorical = is_categorical_feature(feature)
+    names = feature.get("names") if is_categorical else None
+
+    if min_bound is None and max_bound is None and not is_categorical:
+        return ""
+
+    arr = np.asarray(value)
+    flat = arr.flatten()
+    if not flat.size:
+        return ""
+
+    if min_bound is not None:
+        below = flat[flat < min_bound]
+        if below.size:
+            return f"The feature '{name}' has value {below[0].item()!r} below declared min={min_bound!r}.\n"
+    if max_bound is not None:
+        above = flat[flat > max_bound]
+        if above.size:
+            return f"The feature '{name}' has value {above[0].item()!r} above declared max={max_bound!r}.\n"
+    if is_categorical:
+        assert isinstance(names, list) and names, (
+            f"is_categorical_feature returned True for '{name}' but names is {names!r}"
+        )
+        n_classes = len(names)
+        for v in flat:
+            iv = int(v)
+            if iv < 0 or iv >= n_classes:
+                return (
+                    f"The feature '{name}' has value {iv} outside categorical range "
+                    f"[0, {n_classes}) (names={names!r}).\n"
+                )
+    return ""
 
 
 def validate_feature_numpy_array(

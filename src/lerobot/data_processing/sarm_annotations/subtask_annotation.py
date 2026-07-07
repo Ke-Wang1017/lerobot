@@ -355,6 +355,7 @@ class VideoAnnotator:
             if not tmp_path.exists() or tmp_path.stat().st_size == 0:
                 print("Video extraction failed (0 bytes) - skipping episode")
                 if tmp_path.exists():
+                    # safe-destruct: our annotation temp file cleanup
                     tmp_path.unlink()
                 raise RuntimeError("FFmpeg produced empty video file")
 
@@ -364,6 +365,7 @@ class VideoAnnotator:
             # Fail if file is too small (< 100KB likely means extraction failed)
             if file_size_mb < 0.1:
                 print(f"Extracted video too small ({file_size_mb:.2f}MB) - skipping episode")
+                # safe-destruct: our annotation temp file cleanup on error
                 tmp_path.unlink()
                 raise RuntimeError(f"Video extraction produced invalid file ({file_size_mb:.2f}MB)")
 
@@ -456,6 +458,7 @@ class VideoAnnotator:
                     time.sleep(1)
         finally:
             if is_extracted and extracted_path.exists():
+                # safe-destruct: our extracted-frame temp file
                 extracted_path.unlink()
 
 

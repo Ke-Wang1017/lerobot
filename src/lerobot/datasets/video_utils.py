@@ -24,6 +24,7 @@ import tempfile
 import threading
 import warnings
 from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from fractions import Fraction
 from pathlib import Path
@@ -257,12 +258,25 @@ def _default_max_cache_size() -> int | None:
 class VideoDecoderCache:
     """Thread-safe LRU cache for torchcodec ``VideoDecoder`` instances.
 
-    Cached entries hold a ``VideoDecoder`` plus the open ``fsspec`` file handle
-    backing it. When the cache is full and a new path is requested, the
-    least-recently-used entry is evicted and its file handle is closed. This
-    bounds host-RAM growth when iterating over datasets with many distinct
-    video files (otherwise each ``DataLoader`` worker pins every decoder it has
-    ever opened until the process exits).
+    Two concerns are combined here:
+
+    * **Memory bounding (LRU).** Cached entries hold a ``VideoDecoder`` plus the
+      open ``fsspec`` file handle backing it. When the cache is full and a new
+      path is requested, the least-recently-used entry is evicted and its file
+      handle is closed. This bounds host-RAM growth when iterating over datasets
+      with many distinct video files (otherwise each ``DataLoader`` worker pins
+      every decoder it has ever opened until the process exits).
+    * **Thread safety (per-path lock).** Each cached ``VideoDecoder`` wraps
+      non-thread-safe FFmpeg state (an AVFormatContext + AVCodecContext);
+      concurrent ``decoder.get_frames_at`` calls on the same instance from
+      different threads were observed to SIGSEGV under the FastAPI server's
+      threadpool. We attach a per-path lock to each cache entry and expose
+      ``decoder_for()`` as the recommended access pattern — different videos
+      still decode in parallel, but a single video's decode calls are serialized.
+
+    ``get_decoder()`` is preserved for callers that already serialize access
+    externally (e.g. the GUI's prefetch thread which owns its own private cache
+    instance). New callers should prefer ``decoder_for``.
 
     Args:
         max_size: Maximum number of decoders to retain. ``None`` disables
@@ -279,15 +293,21 @@ class VideoDecoderCache:
         if max_size is not None and max_size <= 0:
             raise ValueError(f"max_size must be positive or None; got {max_size}")
         self.max_size: int | None = max_size  # type: ignore[assignment]
-        self._cache: OrderedDict[str, tuple[Any, Any]] = OrderedDict()
+        # (decoder, file_handle, lock) — lock is per-path, held while the
+        # caller is using the decoder. OrderedDict gives us LRU ordering.
+        self._cache: OrderedDict[str, tuple[Any, Any, Lock]] = OrderedDict()
         self._lock = Lock()
 
     def __contains__(self, video_path: object) -> bool:
         with self._lock:
             return str(video_path) in self._cache
 
-    def get_decoder(self, video_path: str):
-        """Get a cached decoder or create a new one, evicting LRU if at capacity."""
+    def _get_or_create(self, video_path: str) -> tuple[Any, Lock]:
+        """Internal: ensure a decoder + its per-path lock exist for ``video_path``.
+
+        Returns ``(decoder, lock)``. Bounds memory via LRU eviction (closing
+        evicted file handles) and is safe to call from multiple threads.
+        """
         if importlib.util.find_spec("torchcodec"):
             from torchcodec.decoders import VideoDecoder
         else:
@@ -297,12 +317,11 @@ class VideoDecoderCache:
             )
 
         video_path = str(video_path)
-
         with self._lock:
             entry = self._cache.get(video_path)
             if entry is not None:
                 self._cache.move_to_end(video_path)
-                return entry[0]
+                return entry[0], entry[2]
 
             file_handle = fsspec.open(video_path).__enter__()
             try:
@@ -310,23 +329,48 @@ class VideoDecoderCache:
             except Exception:
                 file_handle.close()
                 raise
-            self._cache[video_path] = (decoder, file_handle)
+            entry = (decoder, file_handle, Lock())
+            self._cache[video_path] = entry
 
             # Evict LRU entries until we are back under the cap. We close
             # evicted file handles immediately; the associated ``VideoDecoder``
             # is released to the GC when its last reference goes away.
             if self.max_size is not None:
                 while len(self._cache) > self.max_size:
-                    _evicted_path, (_evicted_decoder, evicted_handle) = self._cache.popitem(last=False)
+                    _evicted_path, (_evicted_decoder, evicted_handle, _evicted_lock) = self._cache.popitem(
+                        last=False
+                    )
                     with contextlib.suppress(Exception):
                         evicted_handle.close()
 
-            return decoder
+            return entry[0], entry[2]
+
+    def get_decoder(self, video_path: str):
+        """Get a cached decoder, creating it if needed (LRU-evicting at capacity).
+
+        WARNING: returned decoder is shared across threads. Callers MUST
+        serialize their own use (e.g. by owning a single-threaded cache,
+        as the GUI's prefetch worker does) or prefer :meth:`decoder_for`.
+        """
+        decoder, _ = self._get_or_create(video_path)
+        return decoder
+
+    @contextmanager
+    def decoder_for(self, video_path: str):
+        """Yield the cached decoder for ``video_path`` under its per-video lock.
+
+        Use this around any ``decoder.get_frames_at`` / ``decoder.metadata``
+        access from code paths that may run on multiple threads. Different
+        videos still decode in parallel; only same-video accesses serialize.
+        """
+        decoder, lock = self._get_or_create(video_path)
+        with lock:
+            yield decoder
 
     def clear(self):
         """Clear the cache and close all file handles."""
         with self._lock:
-            for _, file_handle in self._cache.values():
+            for _, file_handle, _ in self._cache.values():
                 with contextlib.suppress(Exception):
                     file_handle.close()
             self._cache.clear()
@@ -374,19 +418,22 @@ def decode_video_frames_torchcodec(
     if decoder_cache is None:
         decoder_cache = _default_decoder_cache
 
-    # Use cached decoder instead of creating new one each time
-    decoder = decoder_cache.get_decoder(str(video_path))
-
     loaded_ts = []
     loaded_frames = []
 
-    # get metadata for frame information
-    metadata = decoder.metadata
-    average_fps = metadata.average_fps
-    # convert timestamps to frame indices
-    frame_indices = [round(ts * average_fps) for ts in timestamps]
-    # retrieve frames based on indices
-    frames_batch = decoder.get_frames_at(indices=frame_indices)
+    # Hold the per-video lock for the entire decode. The VideoDecoder
+    # instance holds non-thread-safe FFmpeg state, so concurrent decodes on
+    # the same video from different FastAPI worker threads were observed to
+    # SIGSEGV. Different videos still decode in parallel (the lock is
+    # per-path, not global).
+    with decoder_cache.decoder_for(str(video_path)) as decoder:
+        # get metadata for frame information
+        metadata = decoder.metadata
+        average_fps = metadata.average_fps
+        # convert timestamps to frame indices
+        frame_indices = [round(ts * average_fps) for ts in timestamps]
+        # retrieve frames based on indices
+        frames_batch = decoder.get_frames_at(indices=frame_indices)
 
     for frame, pts in zip(frames_batch.data, frames_batch.pts_seconds, strict=True):
         loaded_frames.append(frame)
@@ -744,7 +791,9 @@ def concatenate_video_files(
 
     input_container.close()
     output_container.close()
+    # safe-destruct: video concat: move temp → final
     shutil.move(tmp_output_video_path, output_video_path)
+    # safe-destruct: video concat: drop temp file after move
     Path(tmp_concatenate_path).unlink()
 
 
@@ -1076,6 +1125,7 @@ class StreamingVideoEncoder:
             # Clean up temp MP4 files
             video_path = self._video_paths.get(video_key)
             if video_path is not None and video_path.exists():
+                # safe-destruct: video encode: cleanup intermediate dir on completion
                 shutil.rmtree(str(video_path.parent), ignore_errors=True)
 
         self._cleanup()
@@ -1288,6 +1338,7 @@ class VideoEncodingManager:
             png_files = list(img_dir.rglob("*.png"))
             tiff_files = list(img_dir.rglob("*.tiff"))
             if len(png_files) == 0 and len(tiff_files) == 0:
+                # safe-destruct: video encode: drop temp images after encoding
                 shutil.rmtree(img_dir)
                 logger.debug("Cleaned up empty images directory")
             else:

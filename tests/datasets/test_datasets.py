@@ -512,7 +512,10 @@ def test_cleanup_interrupted_episode_removes_image_temp_dirs(tmp_path, empty_ler
         "video": {"dtype": "video", "shape": DUMMY_HWC, "names": ["height", "width", "channels"]},
     }
     ds = empty_lerobot_dataset_factory(
-        root=tmp_path / "interrupted", features=features, streaming_encoding=False
+        root=tmp_path / "interrupted",
+        features=features,
+        streaming_encoding=False,
+        use_per_camera_streaming=False,
     )
     # Add one frame without saving episode simulating an interruption
     ds.add_frame(
@@ -559,6 +562,373 @@ def test_tmp_mixed_deletion(tmp_path, empty_lerobot_dataset_factory):
     assert vid_img_dir.exists(), (
         "Temporary image directory should not be removed for video features when batch_encoding_size == 2"
     )
+
+
+@pytest.mark.parametrize(
+    "hw, description",
+    [
+        ((96, 128), "small images — no downsampling in either path"),
+        ((720, 1280), "large images — both paths downsample (stride 8 → 160x90)"),
+    ],
+)
+def test_streaming_video_stats_correctness(tmp_path, empty_lerobot_dataset_factory, hw, description):
+    """Verify that in-memory video stats are correct.
+
+    Compares running stats (mean/std/min/max) against numpy ground truth computed
+    from the same frames, and verifies quantiles match the old PNG round-trip path.
+
+    Note: The old pipeline had a bug where RunningQuantileStats computed batch**2
+    on uint8 data, causing silent overflow and std=0. Our running stats fix this
+    by accumulating in float64.
+
+    Parametrized over small and large images to exercise the downsampling codepath.
+    """
+    from lerobot.datasets.compute_stats import compute_episode_stats
+
+    vid_key = "video"
+    h, w = hw
+    chw = (3, h, w)
+    hwc = (h, w, 3)
+    features = {
+        vid_key: {"dtype": "video", "shape": chw, "names": ["channels", "height", "width"]},
+    }
+    ds = empty_lerobot_dataset_factory(root=tmp_path / "stats_test", features=features)
+
+    # Record 20 frames so reservoir sampling keeps them all (max_sample_size=300)
+    np.random.seed(42)
+    num_frames = 20
+    raw_frames = []
+    for _ in range(num_frames):
+        frame = np.random.randint(0, 256, hwc, dtype=np.uint8)
+        raw_frames.append(frame)
+        ds.add_frame({vid_key: frame, "task": "test_task"})
+
+    # Finish encoders so reservoir samples are ready
+    ds.writer._finish_video_encoders()
+
+    # --- In-memory stats (running stats + reservoir quantiles) ---
+    in_memory_stats = ds.writer._compute_video_stats_in_memory()
+    assert vid_key in in_memory_stats, "Video key missing from in-memory stats"
+
+    # --- Ground truth: numpy computation on the same frames the encoder saw ---
+    # Use the downsampled reservoir frames (same data the running stats accumulated)
+    reservoir_frames = ds.writer.video_encoders[vid_key].get_sampled_frames()
+    gt_images = np.stack(reservoir_frames).astype(np.float64).transpose(0, 3, 1, 2)  # (N,C,H,W)
+    gt_mean = gt_images.mean(axis=(0, 2, 3), keepdims=True).squeeze(0) / 255.0
+    gt_std = gt_images.std(axis=(0, 2, 3), keepdims=True).squeeze(0) / 255.0
+    gt_min = gt_images.min(axis=(0, 2, 3), keepdims=True).squeeze(0) / 255.0
+    gt_max = gt_images.max(axis=(0, 2, 3), keepdims=True).squeeze(0) / 255.0
+
+    # Running stats should match numpy ground truth (both use float64, same data)
+    for stat_key, gt_val in [("mean", gt_mean), ("std", gt_std), ("min", gt_min), ("max", gt_max)]:
+        mem_val = np.asarray(in_memory_stats[vid_key][stat_key])
+        np.testing.assert_allclose(
+            mem_val,
+            gt_val,
+            atol=1e-10,
+            err_msg=f"Running stat '{stat_key}' differs from numpy ground truth ({description})",
+        )
+
+    # --- Reference path: PNG round-trip for quantile comparison ---
+    import PIL.Image
+
+    png_dir = tmp_path / "reference_pngs"
+    png_dir.mkdir()
+    png_paths = []
+    for i, frame in enumerate(reservoir_frames):
+        path = png_dir / f"frame_{i:06d}.png"
+        PIL.Image.fromarray(frame).save(str(path))
+        png_paths.append(str(path))
+
+    ref_stats = compute_episode_stats({vid_key: png_paths}, {vid_key: {"dtype": "video"}})
+
+    # Quantiles should match the old pipeline (reservoir has all 20 frames in both paths)
+    for stat_key in ["q01", "q10", "q50", "q90", "q99"]:
+        ref_val = np.asarray(ref_stats[vid_key][stat_key])
+        mem_val = np.asarray(in_memory_stats[vid_key][stat_key])
+        np.testing.assert_allclose(
+            mem_val,
+            ref_val,
+            atol=1e-5,
+            rtol=1e-4,
+            err_msg=f"Quantile '{stat_key}' differs between in-memory and reference ({description})",
+        )
+
+
+def test_streaming_video_stats_reservoir_quality(tmp_path, empty_lerobot_dataset_factory):
+    """Verify that online running stats are exact and reservoir quantiles are accurate.
+
+    Uses frames with TEMPORAL STRUCTURE (brightness ramp) so that biased sampling
+    (e.g. only keeping early frames) would produce detectably wrong quantiles.
+
+    Frame i has all pixels set to brightness = i * 255 / (N-1), ramping from
+    black (frame 0) to white (frame N-1).  The per-channel ground-truth is:
+        mean  = 0.50    (midpoint of ramp — exact from running stats)
+        std   ≈ 0.29    (exact from running stats)
+        min   = 0.0     (exact from running stats)
+        max   = 1.0     (exact from running stats)
+        q50   ≈ 0.50    (approximate from reservoir)
+
+    With max_sample_size=300, we use 900 frames so 2/3 are sampled away.
+    A broken reservoir that only kept the first 300 of 900 frames would give
+    q50 ≈ 0.17 — clearly wrong and caught by the ±0.03 tolerance.
+    """
+    from lerobot.datasets.compute_stats import get_feature_stats
+
+    vid_key = "video"
+    h, w = 48, 64
+    chw = (3, h, w)
+    hwc = (h, w, 3)
+    features = {
+        vid_key: {"dtype": "video", "shape": chw, "names": ["channels", "height", "width"]},
+    }
+    ds = empty_lerobot_dataset_factory(root=tmp_path / "reservoir_quality", features=features)
+
+    # Generate 900 frames with a brightness ramp: frame i → pixel value i*255/(N-1)
+    # This has clear temporal structure that would expose biased sampling.
+    # With max_sample_size=300, only 1/3 of frames are kept — real sampling occurs.
+    # Seed both numpy and Python's random (reservoir uses random.randint).
+    import random as stdlib_random
+
+    np.random.seed(42)
+    stdlib_random.seed(42)
+    num_frames = 900
+    all_frames = []
+    for i in range(num_frames):
+        brightness = int(round(i * 255 / (num_frames - 1)))
+        frame = np.full(hwc, brightness, dtype=np.uint8)
+        all_frames.append(frame)
+        ds.add_frame({vid_key: frame, "task": "test_task"})
+
+    ds.writer._finish_video_encoders()
+
+    # --- Ground truth: numpy float64 computation on ALL 900 frames ---
+    # Note: we compute ground truth directly in float64, NOT via get_feature_stats,
+    # because RunningQuantileStats has a uint8 overflow bug (batch**2 on uint8 wraps).
+    all_images_f64 = np.stack(all_frames).astype(np.float64).transpose(0, 3, 1, 2)  # (N,C,H,W)
+    gt_mean = all_images_f64.mean(axis=(0, 2, 3), keepdims=True).squeeze(0) / 255.0
+    gt_std = all_images_f64.std(axis=(0, 2, 3), keepdims=True).squeeze(0) / 255.0
+    gt_min = all_images_f64.min(axis=(0, 2, 3), keepdims=True).squeeze(0) / 255.0
+    gt_max = all_images_f64.max(axis=(0, 2, 3), keepdims=True).squeeze(0) / 255.0
+
+    # For quantile ground truth, use get_feature_stats (quantiles are unaffected by overflow)
+    all_images_u8 = np.stack(all_frames).transpose(0, 3, 1, 2)
+    gt_q_stats = get_feature_stats(all_images_u8, axis=(0, 2, 3), keepdims=True)
+    gt_q_stats = {k: np.squeeze(v / 255.0, axis=0) for k, v in gt_q_stats.items() if k.startswith("q")}
+
+    # --- New path: exact running stats + reservoir quantiles ---
+    computed_stats = ds.writer._compute_video_stats_in_memory()
+    assert vid_key in computed_stats
+
+    # --- Verify mean/std/min/max are EXACT (from running stats over all frames) ---
+    for stat_key, gt_val in [("mean", gt_mean), ("std", gt_std), ("min", gt_min), ("max", gt_max)]:
+        computed_val = computed_stats[vid_key][stat_key]
+        np.testing.assert_allclose(
+            computed_val,
+            gt_val,
+            atol=1e-5,
+            err_msg=f"Running stat '{stat_key}' should be exact but deviates from ground truth",
+        )
+
+    # --- Verify quantiles approximate ground truth (from reservoir sampling) ---
+    # Theoretical 1-sigma for median with n=300: 1/(2*sqrt(300)) ≈ 0.029, so atol=0.03 is safe.
+    # A broken reservoir (first-300-only) would give q50≈0.17, diff=0.33 — caught easily.
+    for stat_key in ["q01", "q10", "q50", "q90", "q99"]:
+        gt_val = gt_q_stats[stat_key]
+        computed_val = computed_stats[vid_key][stat_key]
+        np.testing.assert_allclose(
+            computed_val,
+            gt_val,
+            atol=0.03,
+            err_msg=f"Reservoir '{stat_key}' deviates from ground truth",
+        )
+
+
+def test_streaming_video_stats_single_frame(tmp_path, empty_lerobot_dataset_factory):
+    """Verify in-memory stats work correctly with a single frame (edge case)."""
+    vid_key = "video"
+    features = {
+        vid_key: {"dtype": "video", "shape": DUMMY_CHW, "names": ["channels", "height", "width"]},
+    }
+    ds = empty_lerobot_dataset_factory(root=tmp_path / "single_frame", features=features)
+
+    frame = np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8)
+    ds.add_frame({vid_key: frame, "task": "test_task"})
+    ds.writer._finish_video_encoders()
+
+    stats = ds.writer._compute_video_stats_in_memory()
+    assert vid_key in stats, "Video key missing from stats"
+    # With a single frame, min == max == mean, std ~= 0
+    for stat_key in ["min", "max", "mean", "std", "count"]:
+        assert stat_key in stats[vid_key], f"Missing stat key '{stat_key}'"
+    # Shape should be (C, 1, 1) = (3, 1, 1) after squeeze
+    assert stats[vid_key]["mean"].shape == (3, 1, 1), f"Wrong shape: {stats[vid_key]['mean'].shape}"
+    # Stats are per-channel across all pixels, so min <= mean <= max
+    assert np.all(stats[vid_key]["min"] <= stats[vid_key]["mean"])
+    assert np.all(stats[vid_key]["mean"] <= stats[vid_key]["max"])
+    # Values should be in [0, 1] (normalized by /255)
+    assert np.all(stats[vid_key]["min"] >= 0)
+    assert np.all(stats[vid_key]["max"] <= 1)
+
+
+def test_streaming_video_stats_no_tmp_stats_dir(tmp_path, empty_lerobot_dataset_factory):
+    """Verify that save_episode with streaming encoder never creates a tmp_stats directory."""
+    vid_key = "video"
+    features = {
+        vid_key: {"dtype": "video", "shape": DUMMY_CHW, "names": ["channels", "height", "width"]},
+    }
+    ds = empty_lerobot_dataset_factory(root=tmp_path / "no_tmp", features=features)
+
+    for _ in range(5):
+        ds.add_frame({vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8), "task": "t"})
+    ds.save_episode()
+
+    # In-memory stats path should never create tmp_stats at all
+    assert not (ds.root / "tmp_stats").exists(), "tmp_stats directory should not exist"
+
+
+def test_streaming_video_stats_in_saved_metadata(tmp_path, empty_lerobot_dataset_factory):
+    """Verify that video stats computed in-memory are properly saved to metadata."""
+    vid_key = "video"
+    features = {
+        vid_key: {"dtype": "video", "shape": DUMMY_CHW, "names": ["channels", "height", "width"]},
+        "state": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+    }
+    ds = empty_lerobot_dataset_factory(root=tmp_path / "metadata_test", features=features)
+
+    num_frames = 10
+    for _ in range(num_frames):
+        ds.add_frame(
+            {
+                vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
+                "state": torch.randn(2),
+                "task": "test_task",
+            }
+        )
+    ds.save_episode()
+    ds.finalize()
+
+    # Reload and verify stats
+    loaded = LeRobotDataset(ds.repo_id, root=ds.root)
+    assert loaded.meta.stats is not None
+    assert vid_key in loaded.meta.stats, "Video stats missing from loaded metadata"
+    assert "state" in loaded.meta.stats, "State stats missing from loaded metadata"
+
+    vid_stats = loaded.meta.stats[vid_key]
+    expected_keys = {"min", "max", "mean", "std", "count"}
+    assert expected_keys.issubset(set(vid_stats.keys())), (
+        f"Missing stat keys: {expected_keys - set(vid_stats.keys())}"
+    )
+
+    # Video stats should be per-channel with shape (3,) or (3,1,1) after serialization
+    for k in ["min", "max", "mean", "std"]:
+        val = np.asarray(vid_stats[k])
+        assert val.size == 3, f"Expected 3 values (per-channel) for '{k}', got {val.size}"
+
+    # Count should reflect total frames
+    assert vid_stats["count"] == num_frames
+
+    # Stats should be in [0, 1] range (normalized by /255)
+    for k in ["min", "max", "mean"]:
+        val = np.asarray(vid_stats[k])
+        assert np.all(val >= 0) and np.all(val <= 1), f"Stat '{k}' not in [0,1]: {val}"
+
+
+def test_save_episode_data_then_add_frame(tmp_path, empty_lerobot_dataset_factory):
+    """Regression: save_episode(episode_data=...) must not break subsequent add_frame.
+
+    When save_episode is called with explicit episode_data, clear_episode_buffer()
+    is skipped, leaving streaming video encoders in a finished state. The next
+    add_frame must still work — encoders need to be restarted.
+    """
+    vid_key = "video"
+    features = {
+        vid_key: {"dtype": "video", "shape": DUMMY_CHW, "names": ["channels", "height", "width"]},
+        "state": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+    }
+    ds = empty_lerobot_dataset_factory(root=tmp_path / "ep_data_restart", features=features)
+
+    # Record episode 0 normally (populates the buffer, exercises full path)
+    for _ in range(5):
+        ds.add_frame(
+            {
+                vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
+                "state": torch.randn(2),
+                "task": "task0",
+            }
+        )
+    ds.save_episode()  # calls clear_episode_buffer → restarts encoders
+
+    # Build an external episode buffer (mimics intervention recording pattern)
+    for _ in range(3):
+        frame = {
+            vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
+            "state": torch.randn(2),
+            "task": "task1",
+        }
+        ds.add_frame(frame)
+
+    ds.save_episode()  # save episode 1 normally to advance metadata
+
+    # Now save an episode via episode_data (like the intervention dataset does).
+    # This skips clear_episode_buffer(), leaving encoders finished.
+    ext_buffer2 = ds.writer._create_episode_buffer()
+    for i in range(4):
+        frame = {
+            vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
+            "state": torch.randn(2),
+            "task": "task2",
+        }
+        ext_buffer2["size"] += 1
+        ext_buffer2["task"].append(frame["task"])
+        for key in frame:
+            if key == "task":
+                continue
+            ext_buffer2[key].append(frame[key])
+        # Also push to encoder so it has data
+        if ds.writer.video_encoders and vid_key in ds.writer.video_encoders:
+            ds.writer.video_encoders[vid_key].push_frame(frame[vid_key])
+        ext_buffer2["frame_index"].append(i)
+        ext_buffer2["timestamp"].append(i / ds.fps)
+
+    ds.save_episode(episode_data=ext_buffer2)
+
+    # After save_episode(episode_data=...), encoders are finished but NOT restarted.
+    # Manually restart them (matching the fix in lerobot_record.py).
+    if ds.writer.video_encoders:
+        ds.writer.episode_buffer = ds.writer._create_episode_buffer()
+        ds.writer._start_video_encoders()
+
+    # This must NOT raise "No active episode. Call start_episode() first."
+    ds.add_frame(
+        {
+            vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8),
+            "state": torch.randn(2),
+            "task": "task3",
+        }
+    )
+
+
+def test_streaming_video_stats_multi_episode(tmp_path, empty_lerobot_dataset_factory):
+    """Verify aggregated stats across multiple episodes are correct."""
+    vid_key = "video"
+    features = {
+        vid_key: {"dtype": "video", "shape": DUMMY_CHW, "names": ["channels", "height", "width"]},
+    }
+    ds = empty_lerobot_dataset_factory(root=tmp_path / "multi_ep", features=features)
+
+    for ep in range(3):
+        for _ in range(5):
+            ds.add_frame({vid_key: np.random.randint(0, 256, DUMMY_HWC, dtype=np.uint8), "task": f"ep{ep}"})
+        ds.save_episode()
+
+    ds.finalize()
+    loaded = LeRobotDataset(ds.repo_id, root=ds.root)
+
+    assert loaded.meta.stats is not None
+    assert vid_key in loaded.meta.stats
+    # Aggregated count should be total frames across all episodes
+    assert loaded.meta.stats[vid_key]["count"] == 15
 
 
 # TODO(aliberts):

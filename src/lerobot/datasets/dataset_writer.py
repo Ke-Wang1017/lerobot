@@ -40,10 +40,11 @@ from lerobot.configs import (
     rgb_encoder_defaults,
 )
 
-from .compute_stats import compute_episode_stats
+from .compute_stats import compute_episode_stats, get_feature_stats
 from .dataset_metadata import LeRobotDatasetMetadata
 from .feature_utils import (
     get_hf_features_from_features,
+    is_per_episode_declared,
     validate_episode_buffer,
     validate_frame,
 )
@@ -60,6 +61,7 @@ from .utils import (
     DEFAULT_IMAGE_PATH,
     update_chunk_file_indices,
 )
+from .video_encoder import StreamingVideoEncoder as OurStreamingVideoEncoder
 from .video_utils import (
     StreamingVideoEncoder,
     concatenate_video_files,
@@ -68,6 +70,53 @@ from .video_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _values_match(a, b) -> bool:
+    """Equality check tolerant of numpy scalars / 0-d arrays / lists.
+
+    Used by per-episode-feature consistency: ``add_frame`` may receive a
+    Python scalar on one call and a numpy scalar on the next for the same
+    column. ``a == b`` would either crash on a numpy mismatch or return
+    an array. Coerce via ``np.array_equal`` which handles all sane cases.
+    """
+    try:
+        return bool(np.array_equal(a, b, equal_nan=False))
+    except TypeError:
+        # Strings / objects: fall back to equality.
+        return a == b
+
+
+def _validate_per_episode_consistency(frame: dict, episode_buffer: dict, features: dict) -> None:
+    """Reject ``add_frame`` calls that violate a declared per-episode invariant.
+
+    Pre: ``frame`` is the user-supplied frame dict (after ``validate_frame``);
+    ``episode_buffer`` is the writer's accumulating buffer for the current
+    episode; ``features`` is ``dataset.meta.features``.
+    Post: raises ``ValueError`` if any feature with ``per_episode: true``
+    in ``info.json`` carries a value in ``frame`` that differs from the
+    value already pinned for this episode (i.e. the value of the first
+    frame). On the first frame of an episode this check trivially passes.
+    """
+    for name, ft in features.items():
+        if not is_per_episode_declared(ft):
+            continue
+        if name not in frame:
+            continue
+        new_value = frame[name]
+        existing = episode_buffer.get(name, [])
+        if not existing:
+            # First frame in the episode for this feature — pin.
+            continue
+        pinned = existing[0]
+        if not _values_match(pinned, new_value):
+            ep_idx = episode_buffer.get("episode_index", "?")
+            raise ValueError(
+                f"Feature {name!r} is declared per_episode=true but episode "
+                f"{ep_idx} has inconsistent values: first frame had {pinned!r}, "
+                f"now got {new_value!r}. Either keep the value uniform across the "
+                f"episode or remove the per_episode flag from info.json."
+            )
 
 
 def _encode_video_worker(
@@ -94,6 +143,7 @@ def _encode_video_worker(
         encoder_threads=encoder_threads,
         overwrite=True,
     )
+    # safe-destruct: video encode worker: clean up its own temp img dir
     shutil.rmtree(img_dir)
     return temp_path
 
@@ -115,6 +165,8 @@ class DatasetWriter:
         batch_encoding_size: int,
         streaming_encoder: StreamingVideoEncoder | None = None,
         initial_frames: int = 0,
+        record_images: bool = True,
+        use_per_camera_streaming: bool = False,
     ):
         """Initialize the writer with metadata, codec, and encoder config.
 
@@ -132,9 +184,20 @@ class DatasetWriter:
             batch_encoding_size: Number of episodes to accumulate before
                 batch-encoding videos.
             streaming_encoder: Optional pre-built :class:`StreamingVideoEncoder`
-                for real-time encoding. ``None`` disables streaming mode.
+                (multi-camera) for real-time encoding. ``None`` disables that
+                streaming mode.
             initial_frames: Starting frame count (non-zero when resuming).
+            record_images: When ``False``, image/video frames are discarded
+                rather than written to disk. Used by fast-eval workflows that
+                care only about action/state stats.
+            use_per_camera_streaming: When ``True``, initialize one
+                :class:`OurStreamingVideoEncoder` per video key (alternative to
+                ``streaming_encoder``). Mutually exclusive with
+                ``streaming_encoder``.
         """
+        if streaming_encoder is not None and use_per_camera_streaming:
+            raise ValueError("Pass either 'streaming_encoder' or 'use_per_camera_streaming=True', not both.")
+
         self._meta = meta
         self._root = root
         self._rgb_encoder = rgb_encoder or rgb_encoder_defaults()
@@ -142,6 +205,7 @@ class DatasetWriter:
         self._encoder_threads = encoder_threads
         self._batch_encoding_size = batch_encoding_size
         self._streaming_encoder = streaming_encoder
+        self._record_images = record_images
 
         # Writer state
         self.image_writer: AsyncImageWriter | None = None
@@ -152,6 +216,11 @@ class DatasetWriter:
         self._episodes_since_last_encoding: int = 0
         self._recorded_frames: int = initial_frames
         self._finalized = False
+
+        # Per-camera streaming encoder state (HEAD's OurStreamingVideoEncoder path)
+        self.video_encoders: dict[str, OurStreamingVideoEncoder] = {}
+        if use_per_camera_streaming and record_images and batch_encoding_size == 1:
+            self._init_video_encoders()
 
     def _create_episode_buffer(self, episode_index: int | None = None) -> dict:
         current_ep_idx = self._meta.total_episodes if episode_index is None else episode_index
@@ -175,6 +244,9 @@ class DatasetWriter:
     def _save_image(
         self, image: torch.Tensor | np.ndarray | PIL.Image.Image, fpath: Path, compress_level: int = 1
     ) -> None:
+        # Skip image saving if record_images is False (avoids slow synchronous writes during fast-eval)
+        if not self._record_images:
+            return
         if self.image_writer is None:
             if isinstance(image, torch.Tensor):
                 image = image.cpu().numpy()
@@ -202,6 +274,13 @@ class DatasetWriter:
 
         if self.episode_buffer is None:
             self.episode_buffer = self._create_episode_buffer()
+
+        # Per-episode consistency check: features declared with
+        # ``per_episode: true`` in info.json must carry the same value for
+        # every frame in the episode. Pin the value on the first frame and
+        # reject any subsequent frame that disagrees. The check fires here
+        # so the caller sees the bad call site, not a parquet-write later.
+        _validate_per_episode_consistency(frame, self.episode_buffer, self._meta.features)
 
         # Automatically add frame_index and timestamp to episode buffer
         frame_index = self.episode_buffer["size"]
@@ -234,7 +313,11 @@ class DatasetWriter:
                     f"An element of the frame is not in the features. '{key}' not in '{self._meta.features.keys()}'."
                 )
 
-            if self._meta.features[key]["dtype"] == "video" and self._streaming_encoder is not None:
+            if self._meta.features[key]["dtype"] == "video" and self.video_encoders:
+                # Per-camera streaming encoder (HEAD's path); skip recording in episode_buffer
+                self.video_encoders[key].push_frame(frame[key])
+                continue
+            elif self._meta.features[key]["dtype"] == "video" and self._streaming_encoder is not None:
                 self._streaming_encoder.feed_frame(key, frame[key])
                 self.episode_buffer[key].append(None)
             elif self._meta.features[key]["dtype"] in ["image", "video"]:
@@ -292,10 +375,22 @@ class DatasetWriter:
         self._wait_image_writer()
 
         has_video_keys = len(self._meta.video_keys) > 0
+        use_per_camera = bool(self.video_encoders) and has_video_keys
         use_streaming = self._streaming_encoder is not None and has_video_keys
         use_batched_encoding = self._batch_encoding_size > 1
 
-        if use_streaming:
+        # Finish per-camera encoders early — needed for stats computation below
+        per_camera_temp_paths: dict[str, Path] = {}
+        per_camera_video_stats: dict[str, dict] = {}
+        if use_per_camera:
+            per_camera_temp_paths = self._finish_video_encoders()
+            per_camera_video_stats = self._compute_video_stats_in_memory()
+
+        if use_per_camera:
+            non_video_buffer = {k: v for k, v in episode_buffer.items() if k not in self.video_encoders}
+            ep_stats = compute_episode_stats(non_video_buffer, self._meta.features)
+            ep_stats.update(per_camera_video_stats)
+        elif use_streaming:
             non_video_buffer = {
                 k: v
                 for k, v in episode_buffer.items()
@@ -308,7 +403,22 @@ class DatasetWriter:
 
         ep_metadata = self._save_episode_data(episode_buffer)
 
-        if use_streaming:
+        if use_per_camera:
+            for video_key in self._meta.video_keys:
+                ep_metadata.update(
+                    self._save_episode_video(
+                        video_key, episode_index, temp_path=per_camera_temp_paths[video_key]
+                    )
+                )
+            tmp_videos_root = self._root / "tmp_videos"
+            if tmp_videos_root.exists():
+                with contextlib.suppress(OSError):
+                    # safe-destruct: our per-camera streaming temp dir cleanup
+                    tmp_videos_root.rmdir()
+            # Note: encoder restart for next episode happens in clear_episode_buffer
+            # when episode_data is None. For external episode_data (intervention dataset),
+            # caller must restart via writer._start_video_encoders().
+        elif use_streaming:
             streaming_results = self._streaming_encoder.finish_episode()
             for video_key in self._meta.video_keys:
                 normalization_factor = 255.0 if video_key not in self._meta.depth_keys else 1.0
@@ -321,7 +431,7 @@ class DatasetWriter:
                         for k, v in video_stats.items()
                     }
                 ep_metadata.update(self._save_episode_video(video_key, episode_index, temp_path=temp_path))
-        elif has_video_keys and not use_batched_encoding:
+        elif has_video_keys and not use_batched_encoding and self._record_images:
             num_cameras = len(self._meta.video_keys)
             if parallel_encoding and num_cameras > 1:
                 with concurrent.futures.ProcessPoolExecutor(max_workers=num_cameras) as executor:
@@ -512,6 +622,7 @@ class DatasetWriter:
                 video_key=video_key, chunk_index=chunk_idx, file_index=file_idx
             )
             new_path.parent.mkdir(parents=True, exist_ok=True)
+            # safe-destruct: video encode: move temp → final episode video path
             shutil.move(str(ep_path), str(new_path))
         else:
             latest_ep = self._meta.latest_episode
@@ -530,6 +641,7 @@ class DatasetWriter:
                     video_key=video_key, chunk_index=chunk_idx, file_index=file_idx
                 )
                 new_path.parent.mkdir(parents=True, exist_ok=True)
+                # safe-destruct: video encode: move temp → final episode video path
                 shutil.move(str(ep_path), str(new_path))
                 latest_duration_in_s = 0.0
             else:
@@ -539,6 +651,7 @@ class DatasetWriter:
                 )
 
         # Remove temporary directory
+        # safe-destruct: video encode: drop temp parent dir after move
         shutil.rmtree(str(ep_path.parent))
 
         # Update video info (only needed when first episode is encoded)
@@ -567,7 +680,10 @@ class DatasetWriter:
             delete_images: If ``True``, remove temporary image directories
                 written for the current episode.
         """
-        # Cancel streaming encoder if active
+        # Discard in-progress per-camera encoders and restart for fresh episode
+        if self.video_encoders:
+            self._discard_and_restart_video_encoders()
+        # Cancel multi-camera streaming encoder if active
         if self._streaming_encoder is not None:
             self._streaming_encoder.cancel_episode()
 
@@ -582,6 +698,7 @@ class DatasetWriter:
             for cam_key in self._meta.image_keys:
                 img_dir = self._get_image_file_dir(episode_index, cam_key)
                 if img_dir.is_dir():
+                    # safe-destruct: clear_episode_buffer: drop our episode temp images
                     shutil.rmtree(img_dir)
 
         self.episode_buffer = self._create_episode_buffer()
@@ -664,7 +781,96 @@ class DatasetWriter:
                 logger.debug(
                     f"Cleaning up interrupted episode images for episode {episode_index}, camera {key}"
                 )
+                # safe-destruct: cleanup_interrupted_episode: drop our episode temp images
                 shutil.rmtree(img_dir)
+
+    # ── Per-camera streaming encoder helpers (HEAD's path) ──
+
+    def _make_video_tmp_path(self, video_key: str) -> Path:
+        """Generate a temp path for the per-camera streaming encoder output.
+
+        Each video gets its own subdirectory so ``_save_episode_video()`` can
+        ``shutil.rmtree(parent)`` safely.
+        """
+        ep_idx = self.episode_buffer["episode_index"]
+        if isinstance(ep_idx, np.ndarray):
+            ep_idx = ep_idx.item() if ep_idx.size == 1 else ep_idx[0]
+        tmp_dir = self._root / "tmp_videos" / f"ep_{ep_idx}_{video_key}"
+        return tmp_dir / f"{video_key}.mp4"
+
+    def _init_video_encoders(self) -> None:
+        """Initialize and start per-camera streaming video encoders for video keys."""
+        self.video_encoders = {}
+        if not self._meta.video_keys:
+            return
+        for video_key in self._meta.video_keys:
+            encoder_cfg = self._depth_encoder if video_key in self._meta.depth_keys else self._rgb_encoder
+            # Map the per-camera encoder config onto OurStreamingVideoEncoder. g/crf/
+            # fast_decode are None-guarded inside the encoder; preset is only safe when
+            # set (None would stringify to "None" for libsvtav1), so pass it conditionally.
+            encoder_kwargs = {
+                "fps": self._meta.fps,
+                "vcodec": encoder_cfg.vcodec,
+                "pix_fmt": encoder_cfg.pix_fmt,
+                "g": encoder_cfg.g,
+                "crf": encoder_cfg.crf,
+                "fast_decode": encoder_cfg.fast_decode,
+            }
+            if encoder_cfg.preset is not None:
+                encoder_kwargs["preset"] = encoder_cfg.preset
+            self.video_encoders[video_key] = OurStreamingVideoEncoder(**encoder_kwargs)
+        self._start_video_encoders()
+
+    def _start_video_encoders(self) -> None:
+        """Start encoders for a new episode."""
+        for video_key, encoder in self.video_encoders.items():
+            encoder.start_episode(self._make_video_tmp_path(video_key))
+
+    def _stop_video_encoders(self) -> None:
+        """Graceful shutdown of all per-camera encoders."""
+        for encoder in self.video_encoders.values():
+            encoder.stop()
+        self.video_encoders = {}
+
+    def _finish_video_encoders(self) -> dict[str, Path]:
+        """Finish all active encoders, return ``{video_key: temp_video_path}``."""
+        return {key: enc.finish() for key, enc in self.video_encoders.items()}
+
+    def _discard_and_restart_video_encoders(self) -> None:
+        """Discard current episode and restart encoders. Used by re-record."""
+        for video_key, encoder in self.video_encoders.items():
+            encoder.discard()
+            encoder.start_episode(self._make_video_tmp_path(video_key))
+
+    def _compute_video_stats_in_memory(self) -> dict[str, dict]:
+        """Compute video statistics directly from in-memory encoder data.
+
+        Uses exact running stats (mean/std/min/max) accumulated over ALL frames,
+        combined with reservoir-sampled frames for quantile estimation.
+        Eliminates the PNG write/read round-trip entirely.
+        """
+        video_stats = {}
+        for video_key, encoder in self.video_encoders.items():
+            running = encoder.get_running_stats()
+            frames = encoder.get_sampled_frames()
+            if running is None or not frames:
+                continue
+
+            images = np.stack(frames).transpose(0, 3, 1, 2)
+            reservoir_stats = get_feature_stats(images, axis=(0, 2, 3), keepdims=True)
+
+            stats = {}
+            for k, v in reservoir_stats.items():
+                if k in ("mean", "std", "min", "max"):
+                    stats[k] = running[k].reshape(-1, 1, 1) / 255.0
+                elif k == "count":
+                    stats[k] = v
+                else:
+                    stats[k] = np.squeeze(v / 255.0, axis=0)
+
+            stats["count"] = np.array([encoder._frame_count])
+            video_stats[video_key] = stats
+        return video_stats
 
     def finalize(self) -> None:
         """Flush all pending work and release all resources.
@@ -678,11 +884,14 @@ class DatasetWriter:
             self.image_writer.wait_until_done()
             self.image_writer.stop()
             self.image_writer = None
-        # 2. Flush pending video encoding (streaming or batch)
+        # 2. Stop per-camera streaming encoders (HEAD's path)
+        if self.video_encoders:
+            self._stop_video_encoders()
+        # 3. Flush pending video encoding (multi-camera streaming or batch)
         self.flush_pending_videos()
-        # 3. Close own parquet writer
+        # 4. Close own parquet writer
         self.close_writer()
-        # 4. Finalize metadata (idempotent)
+        # 5. Finalize metadata (idempotent)
         self._meta.finalize()
         self._finalized = True
 

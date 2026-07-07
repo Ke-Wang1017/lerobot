@@ -25,8 +25,7 @@ from lerobot.configs.train import TrainPipelineConfig
 from lerobot.transforms import ImageTransforms
 from lerobot.utils.constants import ACTION, IMAGENET_STATS, OBS_PREFIX, REWARD
 
-from .dataset_metadata import LeRobotDatasetMetadata
-from .lerobot_dataset import LeRobotDataset
+from .lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from .multi_dataset import MultiLeRobotDataset
 from .streaming_dataset import StreamingLeRobotDataset
 
