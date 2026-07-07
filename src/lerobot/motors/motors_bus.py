@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import cached_property
 from pprint import pformat
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, Union
 
 from tqdm import tqdm
 
@@ -48,8 +48,8 @@ else:
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 from lerobot.utils.utils import enter_pressed, move_cursor_up
 
-type NameOrID = str | int
-type Value = int | float
+NameOrID = Union[str, int]
+Value = Union[int, float]
 
 logger = logging.getLogger(__name__)
 

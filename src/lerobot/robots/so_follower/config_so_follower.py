@@ -42,6 +42,7 @@ class SOFollowerConfig:
     use_degrees: bool = True
 
 
+@RobotConfig.register_subclass("so107_follower")
 @RobotConfig.register_subclass("so101_follower")
 @RobotConfig.register_subclass("so100_follower")
 @dataclass
@@ -51,3 +52,4 @@ class SOFollowerRobotConfig(RobotConfig, SOFollowerConfig):
 
 SO100FollowerConfig = SOFollowerRobotConfig
 SO101FollowerConfig = SOFollowerRobotConfig
+SO107FollowerConfig = SOFollowerRobotConfig

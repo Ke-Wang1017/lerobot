@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from lerobot.utils.import_utils import _hidapi_available, _pygame_available, require_package
 from lerobot.utils.keyboard_input import pynput_can_capture
+from lerobot.utils.utils import log_say
 
 from ..utils import TeleopEvents
 
@@ -221,12 +222,13 @@ class KeyboardController(InputController):
 class GamepadController(InputController):
     """Generate motion deltas from gamepad input."""
 
-    def __init__(self, x_step_size=1.0, y_step_size=1.0, z_step_size=1.0, deadzone=0.1):
+    def __init__(self, x_step_size=1.0, y_step_size=1.0, z_step_size=1.0, deadzone=0.1, play_sounds=True):
         require_package("pygame", extra="gamepad")
         super().__init__(x_step_size, y_step_size, z_step_size)
         self.deadzone = deadzone
         self.joystick = None
         self.intervention_flag = False
+        self.play_sounds = play_sounds
 
     def start(self):
         """Initialize pygame and the gamepad."""
@@ -263,12 +265,15 @@ class GamepadController(InputController):
         for event in pygame.event.get():
             if event.type == pygame.JOYBUTTONDOWN:
                 if event.button == 3:
+                    log_say("Success", self.play_sounds)
                     self.episode_end_status = TeleopEvents.SUCCESS
                 # A button (1) for failure
                 elif event.button == 1:
+                    log_say("Failure", self.play_sounds)
                     self.episode_end_status = TeleopEvents.FAILURE
                 # X button (0) for rerecord
                 elif event.button == 0:
+                    log_say("Re-record episode", self.play_sounds)
                     self.episode_end_status = TeleopEvents.RERECORD_EPISODE
 
                 # RB button (6) for closing gripper
@@ -305,7 +310,7 @@ class GamepadController(InputController):
             x_input = self.joystick.get_axis(1)  # Left/Right
 
             # Right stick Y (typically axis 3 or 4)
-            z_input = self.joystick.get_axis(3)  # Up/Down for Z
+            z_input = self.joystick.get_axis(4)  # Up/Down for Z
 
             # Apply deadzone to avoid drift
             x_input = 0 if abs(x_input) < self.deadzone else x_input
@@ -362,12 +367,15 @@ class GamepadControllerHID(InputController):
         devices = hid.enumerate()
         for device in devices:
             device_name = device["product_string"]
-            if any(controller in device_name for controller in ["Logitech", "Xbox", "PS4", "PS5"]):
+            if any(
+                controller in device_name for controller in ["Logitech", "Xbox", "PS4", "PS5", "DualSense"]
+            ):
                 return device
 
-        logging.error(
-            "No gamepad found, check the connection and the product string in HID to add your gamepad"
-        )
+        error_msg = "No compatible gamepad found. Available devices:"
+        for device in devices:
+            error_msg += f"\n  {device['product_string']} (VID: {device['vendor_id']:04x}, PID: {device['product_id']:04x})"
+        logging.error(error_msg)
         return None
 
     def start(self):

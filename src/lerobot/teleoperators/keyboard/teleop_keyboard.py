@@ -105,14 +105,15 @@ class KeyboardTeleop(Teleoperator):
 
     def _on_press(self, key):
         if hasattr(key, "char"):
-            key = key.char
-        self.event_queue.put((key, True))
+            self.event_queue.put((key.char, True))
+        else:
+            self.event_queue.put((key, True))
 
     def _on_release(self, key):
         if hasattr(key, "char"):
-            key = key.char
-        self.event_queue.put((key, False))
-
+            self.event_queue.put((key.char, False))
+        else:
+            self.event_queue.put((key, False))
         if key == keyboard.Key.esc:
             logging.info("ESC pressed, disconnecting.")
             self.disconnect()
@@ -208,6 +209,12 @@ class KeyboardEndEffectorTeleop(KeyboardTeleop):
                 # this is useful for retrieving other events like interventions for RL, episode success, etc.
                 self.misc_keys_queue.put(key)
 
+        # Only remove keys that have been released (val == False)
+        # Keep pressed keys so get_teleop_events() can detect interventions
+        keys_to_remove = [key for key, val in self.current_pressed.items() if not val]
+        for key in keys_to_remove:
+            del self.current_pressed[key]
+
         action_dict = {
             "delta_x": delta_x,
             "delta_y": delta_y,
@@ -258,7 +265,9 @@ class KeyboardEndEffectorTeleop(KeyboardTeleop):
         ]
         is_intervention = any(self.current_pressed.get(key, False) for key in movement_keys)
 
-        self.current_pressed.clear()
+        # NOTE: deliberately do NOT clear current_pressed here. The fork keeps held
+        # keys across calls (released keys are pruned in get_action) so that
+        # intervention detection works for keys held down across control cycles.
 
         # Check for episode control commands from misc_keys_queue
         terminate_episode = False

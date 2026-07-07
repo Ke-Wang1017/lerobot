@@ -37,5 +37,16 @@ class SOLeaderTeleopConfig(TeleoperatorConfig, SOLeaderConfig):
     pass
 
 
+@TeleoperatorConfig.register_subclass("so107_leader")
+@dataclass
+class SO107LeaderConfig(TeleoperatorConfig, SOLeaderConfig):
+    """SO-107 Leader configuration with gripper bounce and intervention support."""
+
+    # Gripper bounce back to neutral position (50% open)
+    gripper_bounce: bool = False
+    # Enable intervention mode (press SPACE to toggle during policy execution)
+    intervention_enabled: bool = False
+
+
 SO100LeaderConfig = SOLeaderTeleopConfig
 SO101LeaderConfig = SOLeaderTeleopConfig

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>LeRobot Quest VR teleop</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: monospace; background: #111; color: #0f0; padding: 1em; font-size: 18px; }
+  button { font-size: 22px; padding: 12px 24px; margin: 4px 8px 4px 0; }
+  #stats { white-space: pre; margin-top: 1em; font-size: 16px; }
+  #log { margin-top: 1em; max-height: 200px; overflow-y: scroll; font-size: 12px; color: #888; background: #000; padding: 8px; }
+</style>
+</head>
+<body>
+<h1>LeRobot Quest VR teleop</h1>
+<div>
+  <button id="connect">1. Connect</button>
+  <button id="enterAR">2a. Enter AR (passthrough)</button>
+  <button id="enterVR">2b. Enter VR (opaque)</button>
+</div>
+<div id="stats">disconnected</div>
+<div id="log"></div>
+<script>
+const WS_URL = `wss://${location.hostname}:${location.port || 8443}/ws`;
+// Server-side template substitution. Keep in sync with QuestVRTeleopConfig.
+// {{KEY}} markers are replaced before the page is served; the fallback
+// keeps standalone debugging (file://-loaded HTML) functional.
+const CLUTCH_BUTTON_INDEX = parseInt("{{CLUTCH_BUTTON_INDEX}}", 10) || 1;
+const $ = id => document.getElementById(id);
+const log = m => {
+  const d = $("log");
+  d.textContent = `[${(performance.now()/1000).toFixed(2)}s] ${m}\n` + d.textContent.split('\n').slice(0, 50).join('\n');
+};
+
+let ws = null, xrSession = null, refSpace = null;
+let gl = null, xrCanvas = null;
+let lastRTT = NaN, sentCount = 0;
+let wantConnected = false, reconnectTimer = null;
+// Last frame's clutch state, keyed by controller handedness. Used to
+// detect the rising/falling edge for haptic feedback. Initially unset
+// (no controller -> no edge), populated on first observed frame.
+const lastClutchByHand = {};
+// Per-arm IK-hold state pushed by the server. While true, the page
+// re-fires a soft pulse on the corresponding controller every
+// HOLD_RUMBLE_PERIOD_MS to render "you're pushing against an invisible
+// wall" — the IK is holding the last commanded pose because the QP is
+// infeasible (workspace clip, EE-step cap, NoSolutionFound, or the
+// implausible-jump backstop).
+const holdRumbleTimers = { left: null, right: null };
+const HOLD_RUMBLE_INTENSITY = 0.18;
+const HOLD_RUMBLE_PULSE_MS = 80;
+const HOLD_RUMBLE_PERIOD_MS = 130;
+
+function startHoldRumble(handedness) {
+  if (holdRumbleTimers[handedness] !== null) return;
+  // Re-pulse periodically so the operator feels continuous rumble.
+  // GamepadHapticActuator.pulse is one-shot, so we drive the cadence
+  // ourselves. Looking up the controller per tick because the
+  // XRInputSource set is mutable.
+  const pulseOnce = () => {
+    if (!xrSession) return;
+    for (const src of xrSession.inputSources) {
+      if (src.handedness !== handedness) continue;
+      const act = src.gamepad && src.gamepad.hapticActuators && src.gamepad.hapticActuators[0];
+      if (act && act.pulse) act.pulse(HOLD_RUMBLE_INTENSITY, HOLD_RUMBLE_PULSE_MS).catch(() => {});
+      break;
+    }
+  };
+  pulseOnce();  // fire immediately so the rising edge is felt
+  holdRumbleTimers[handedness] = setInterval(pulseOnce, HOLD_RUMBLE_PERIOD_MS);
+}
+
+function stopHoldRumble(handedness) {
+  if (holdRumbleTimers[handedness] !== null) {
+    clearInterval(holdRumbleTimers[handedness]);
+    holdRumbleTimers[handedness] = null;
+  }
+}
+
+function updateStats() {
+  $("stats").textContent =
+    `ws:    ${ws && ws.readyState === 1 ? 'open' : 'closed'}\n` +
+    `XR:    ${xrSession ? 'active' : 'inactive'}\n` +
+    `sent:  ${sentCount} frames\n` +
+    `RTT:   ${isNaN(lastRTT) ? '—' : lastRTT.toFixed(1) + ' ms'}`;
+}
+
+function connect() {
+  wantConnected = true;
+  _openWS();
+}
+
+function _openWS() {
+  if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => { log("ws open"); updateStats(); };
+  ws.onerror = e => log("ws error");
+  ws.onclose = () => {
+    log("ws closed");
+    // Clear hold-rumble timers — without this, a disconnect-while-holding
+    // would leave the interval firing forever (the pulse calls no-op
+    // without an XR session, but the JS timers stay alive).
+    stopHoldRumble("left");
+    stopHoldRumble("right");
+    updateStats();
+    if (wantConnected && !reconnectTimer) {
+      reconnectTimer = setTimeout(() => { reconnectTimer = null; _openWS(); }, 1000);
+    }
+  };
+  ws.onmessage = ev => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "ping") {
+      ws.send(JSON.stringify({type: "pong", seq: msg.seq, t_pc_send: msg.t_pc_send}));
+    } else if (msg.type === "rtt") {
+      lastRTT = msg.ms;
+      updateStats();
+    } else if (msg.type === "hold") {
+      // Server pushes this on every transition of the per-arm IK-hold
+      // state. Idempotent: start/stop guard against double-toggle, so
+      // a duplicate message is harmless.
+      if (msg.left) startHoldRumble("left"); else stopHoldRumble("left");
+      if (msg.right) startHoldRumble("right"); else stopHoldRumble("right");
+    }
+  };
+}
+
+async function enterSession(mode) {
+  if (!navigator.xr) { log("navigator.xr unavailable"); return; }
+  const ok = await navigator.xr.isSessionSupported(mode);
+  if (!ok) { log(mode + " not supported"); return; }
+  try {
+    xrCanvas = document.createElement("canvas");
+    document.body.appendChild(xrCanvas);
+    gl = xrCanvas.getContext("webgl", { xrCompatible: true });
+    if (!gl) throw new Error("no webgl");
+    xrSession = await navigator.xr.requestSession(mode);
+    await xrSession.updateRenderState({ baseLayer: new XRWebGLLayer(xrSession, gl) });
+    refSpace = await xrSession.requestReferenceSpace("local");
+    xrSession.requestAnimationFrame(onXRFrame);
+    xrSession.addEventListener("end", () => {
+      xrSession = null;
+      if (xrCanvas) { xrCanvas.remove(); xrCanvas = null; gl = null; }
+      updateStats();
+    });
+    log(mode + " session started");
+    updateStats();
+  } catch (e) {
+    log(mode + " failed: " + e.message);
+  }
+}
+
+function onXRFrame(time, frame) {
+  if (!xrSession) return;
+  xrSession.requestAnimationFrame(onXRFrame);
+  // Required: bind the XR framebuffer and clear (alpha=0 in AR for passthrough).
+  const isAR = xrSession.environmentBlendMode !== "opaque";
+  const layer = xrSession.renderState.baseLayer;
+  if (gl && layer) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+    gl.clearColor(0, 0, 0, isAR ? 0 : 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  }
+  if (!ws || ws.readyState !== 1) return;
+  const poses = [];
+  for (const src of frame.session.inputSources) {
+    if (!src.gripSpace) continue;
+    const pose = frame.getPose(src.gripSpace, refSpace);
+    if (!pose) continue;
+    const p = pose.transform.position, o = pose.transform.orientation;
+    const buttons = src.gamepad ? src.gamepad.buttons.map(b => +b.value.toFixed(3)) : [];
+    // Per-controller haptic on clutch edge. Engage = crisp pulse,
+    // release = softer pulse. Tactile confirmation that the engage
+    // snapshot has just been latched / dropped — the operator's eyes
+    // are inside the VR layer, so any non-haptic signal would be
+    // invisible. ``pulse(intensity, duration_ms)`` returns a Promise;
+    // we don't await it. Missing actuator (e.g. on a non-Quest browser
+    // during debug) silently no-ops.
+    if (buttons.length > CLUTCH_BUTTON_INDEX) {
+      const clutch = buttons[CLUTCH_BUTTON_INDEX] > 0.5;
+      const last = lastClutchByHand[src.handedness];
+      if (last !== undefined && clutch !== last) {
+        const actuator = src.gamepad && src.gamepad.hapticActuators && src.gamepad.hapticActuators[0];
+        if (actuator && actuator.pulse) {
+          actuator.pulse(clutch ? 0.7 : 0.25, clutch ? 120 : 60).catch(() => {});
+        }
+      }
+      lastClutchByHand[src.handedness] = clutch;
+    }
+    poses.push({
+      hand: src.handedness,
+      pos: [+p.x.toFixed(5), +p.y.toFixed(5), +p.z.toFixed(5)],
+      rot: [+o.x.toFixed(5), +o.y.toFixed(5), +o.z.toFixed(5), +o.w.toFixed(5)],
+      buttons,
+    });
+  }
+  ws.send(JSON.stringify({
+    type: "frame",
+    t_quest_send: performance.now(),
+    poses,
+  }));
+  sentCount++;
+  if ((sentCount & 31) === 0) updateStats();
+}
+
+$("connect").onclick = connect;
+$("enterAR").onclick = () => enterSession("immersive-ar");
+$("enterVR").onclick = () => enterSession("immersive-vr");
+updateStats();
+</script>
+</body>
+</html>

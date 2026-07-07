@@ -55,6 +55,26 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .so_leader import SO101Leader
 
         return SO101Leader(config)
+    elif config.type == "so107_leader":
+        from .so_leader import SO107Leader
+
+        return SO107Leader(config)
+    elif config.type == "so107_leader_highrate":
+        from .so107_leader_highrate import SO107LeaderHighRate
+
+        return SO107LeaderHighRate(config)
+    elif config.type == "so_leader_highrate":
+        from .so_leader_highrate import SOLeaderHighRate
+
+        return SOLeaderHighRate(config)
+    elif config.type == "stretch3":
+        from .stretch3_gamepad import Stretch3GamePad
+
+        return Stretch3GamePad(config)
+    elif config.type == "widowx":
+        from .widowx import WidowX
+
+        return WidowX(config)
     elif config.type == "mock_teleop":
         from tests.mocks.mock_teleop import MockTeleop
 
@@ -83,6 +103,14 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .bi_so_leader import BiSOLeader
 
         return BiSOLeader(config)
+    elif config.type == "bi_so107_leader":
+        from .bi_so107_leader import BiSO107Leader
+
+        return BiSO107Leader(config)
+    elif config.type == "bi_so107_leader_highrate":
+        from .bi_so107_leader_highrate import BiSO107LeaderHighRate
+
+        return BiSO107LeaderHighRate(config)
     elif config.type == "reachy2_teleoperator":
         from .reachy2_teleoperator import Reachy2Teleoperator
 
@@ -99,6 +127,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .openarm_mini import OpenArmMini
 
         return OpenArmMini(config)
+    elif config.type == "quest_vr":
+        from .quest_vr import QuestVRTeleop
+
+        return QuestVRTeleop(config)
     elif config.type == "bi_openarm_mini":
         from .bi_openarm_mini import BiOpenArmMini
 

@@ -24,8 +24,9 @@ from lerobot.motors.feetech import (
     FeetechMotorsBus,
     OperatingMode,
 )
-from lerobot.types import RobotAction, RobotObservation
+from lerobot.types import ActionChunk, RobotAction, RobotObservation, action_first_frame
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
+from lerobot.utils.utils import log_say
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
@@ -61,6 +62,8 @@ class SOFollower(Robot):
             calibration=self.calibration,
         )
         self.cameras = make_cameras_from_configs(config.cameras)
+        # Cache for all motor positions to handle communication failures when motors can't reach goal
+        self._cached_motor_positions: dict[str, float] = {}
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -178,11 +181,35 @@ class SOFollower(Robot):
             self.bus.setup_motor(motor)
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
+    def _sync_read_with_motor_fallback(self, data_name: str, num_retry: int = 5) -> dict[str, float]:
+        """Read motor positions with fallback to cached values on communication failures.
+
+        When motors can't reach their goal positions (e.g., gripper grasping rigid object),
+        communication can fail. This method uses cached motor positions as fallback.
+        """
+        try:
+            # Try reading all motors
+            result = self.bus.sync_read(data_name, num_retry=num_retry)
+            # Update cache with successful read
+            self._cached_motor_positions.update(result)
+            return result
+        except ConnectionError as e:
+            # Sync read failed - use cached values
+            if self._cached_motor_positions:
+                logger.warning(f"Motor sync_read failed: {e}")
+                log_say("Using cached motor positions", play_sounds=True, blocking=False)
+                return self._cached_motor_positions.copy()
+            else:
+                # No cache available, initialize with zeros
+                logger.error("Motor sync_read failed and no cache available, using zeros")
+                log_say("Motor read failed, no cache available", play_sounds=True, blocking=False)
+                return dict.fromkeys(self.bus.motors, 0.0)
+
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:
         # Read arm position
         start = time.perf_counter()
-        obs_dict = self.bus.sync_read("Present_Position")
+        obs_dict = self._sync_read_with_motor_fallback("Present_Position")
         obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
@@ -204,12 +231,17 @@ class SOFollower(Robot):
         return obs_dict
 
     @check_if_not_connected
-    def send_action(self, action: RobotAction) -> RobotAction:
+    def send_action(self, action: RobotAction | ActionChunk) -> RobotAction:
         """Command arm to move to a target joint configuration.
 
         The relative action magnitude may be clipped depending on the configuration parameter
         `max_relative_target`. In this case, the action sent differs from original action.
         Thus, this function always returns the action actually sent.
+
+        If ``action`` is an :class:`ActionChunk`, this robot doesn't consume the
+        horizon — only ``frames[0]`` is used. Predictive / chunk-aware robots
+        override ``send_action`` to interpolate at ``now + L``. See
+        :class:`lerobot.robots.so107_follower_predictive.SO107FollowerPredictive`.
 
         Raises:
             RobotDeviceNotConnectedError: if robot is not connected.
@@ -218,12 +250,13 @@ class SOFollower(Robot):
             RobotAction: the action sent to the motors, potentially clipped.
         """
 
+        action = action_first_frame(action)
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
         # Cap goal position when too far away from present position.
         # /!\ Slower fps expected due to reading from the follower.
         if self.config.max_relative_target is not None:
-            present_pos = self.bus.sync_read("Present_Position")
+            present_pos = self._sync_read_with_motor_fallback("Present_Position")
             goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
@@ -242,3 +275,35 @@ class SOFollower(Robot):
 
 SO100Follower = SOFollower
 SO101Follower = SOFollower
+
+
+class SO107Follower(SOFollower):
+    """
+    SO-107 Follower Arm designed by TheRobotStudio and Hugging Face.
+    7-axis arm with forearm_roll joint.
+    """
+
+    name = "so107_follower"
+
+    def __init__(self, config: SOFollowerRobotConfig):
+        # Call Robot.__init__ directly to set up config, then define our own motors
+        Robot.__init__(self, config)
+        self.config = config
+
+        # SO-107 specific: 7 motors including forearm_roll
+        norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
+        self.bus = FeetechMotorsBus(
+            port=self.config.port,
+            motors={
+                "shoulder_pan": Motor(1, "sts3215", norm_mode_body),
+                "shoulder_lift": Motor(2, "sts3215", norm_mode_body),
+                "elbow_flex": Motor(3, "sts3215", norm_mode_body),
+                "forearm_roll": Motor(4, "sts3215", norm_mode_body),  # Extra motor for SO-107
+                "wrist_flex": Motor(5, "sts3215", norm_mode_body),
+                "wrist_roll": Motor(6, "sts3215", norm_mode_body),
+                "gripper": Motor(7, "sts3215", MotorNormMode.RANGE_0_100),
+            },
+            calibration=self.calibration,
+        )
+        self.cameras = make_cameras_from_configs(config.cameras)
+        self._cached_motor_positions: dict[str, float] = {}

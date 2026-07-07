@@ -20,7 +20,7 @@ from typing import Any
 import draccus
 
 from lerobot.motors.motors_bus import MotorCalibration
-from lerobot.types import RobotAction
+from lerobot.types import ActionChunk, RobotAction
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, TELEOPERATORS
 
 from .config import TeleoperatorConfig
@@ -186,6 +186,33 @@ class Teleoperator(abc.ABC):
                 structure should match :pymeth:`observation_features`.
         """
         pass
+
+    def get_action_with_horizon(self) -> ActionChunk | None:
+        """Optional: return an :class:`ActionChunk` of upcoming intent samples.
+
+        Default implementation returns ``None``, indicating this source
+        has no horizon (e.g. a leader arm — its future is unknowable).
+        Sources that DO have a horizon (trajectory replay, chunked
+        policy adapters) override this to expose ``frames[0]`` for the
+        current tick plus the following N frames at a fixed cadence.
+
+        Postconditions when not None:
+          * ``chunk.frames[0]`` MUST match ``get_action()`` at the same
+            wall-time tick — the loop driver may call both, and the
+            dataset writer records ``chunk.frames[0]`` as the action
+            for the current iteration.
+          * ``chunk.fps`` is a positive constant per teleop instance
+            (typically the source's native sample rate).
+
+        Loop drivers that recognise the chunk shape will route it to
+        ``robot.send_action(chunk)`` so chunk-aware robots
+        (e.g. ``SO107FollowerPredictive``) can perform exact-lookup
+        lookahead at ``now + L``. Loop drivers that don't recognise
+        chunks fall back to ``get_action()`` and the predictive robot
+        extrapolates from the resulting intent stream — slightly less
+        accurate but still correct.
+        """
+        return None
 
     @abc.abstractmethod
     def send_feedback(self, feedback: dict[str, Any]) -> None:

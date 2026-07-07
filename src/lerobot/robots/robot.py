@@ -15,11 +15,12 @@
 import abc
 import builtins
 from pathlib import Path
+from typing import Any
 
 import draccus
 
 from lerobot.motors import MotorCalibration
-from lerobot.types import RobotAction, RobotObservation
+from lerobot.types import ActionChunk, RobotAction, RobotObservation
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 
 from .config import RobotConfig
@@ -42,6 +43,12 @@ class Robot(abc.ABC):
     # Set these in ALL subclasses
     config_class: builtins.type[RobotConfig]
     name: str
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        from lerobot.robots.obs_stream import wrap_robot_cls
+
+        wrap_robot_cls(cls)
 
     def __init__(self, config: RobotConfig):
         self.robot_type = self.name
@@ -191,17 +198,24 @@ class Robot(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def send_action(self, action: RobotAction) -> RobotAction:
+    def send_action(self, action: RobotAction | ActionChunk) -> RobotAction:
         """
         Send an action command to the robot.
 
         Args:
-            action (RobotAction): Dictionary representing the desired action. Its structure should match
-                :pymeth:`action_features`.
+            action: Either a ``RobotAction`` dict (single intent at the
+                current tick — historical shape) or an :class:`ActionChunk`
+                exposing a fixed-cadence horizon of intent samples.
+                Chunk-aware robots (e.g. ``SO107FollowerPredictive``) use
+                the horizon for exact-lookahead lookup; chunk-unaware
+                robots call :func:`lerobot.types.action_first_frame` at
+                the top of ``send_action`` to fall back to ``frames[0]``.
 
         Returns:
-            RobotAction: The action actually sent to the motors potentially clipped or modified, e.g. by
-                safety limits on velocity.
+            RobotAction: The action actually sent to the motors, potentially
+                clipped or modified. Always a dict (= ``frames[0]`` when a
+                chunk was passed) — the dataset writer records this and
+                relies on the dict shape.
         """
         pass
 
@@ -209,3 +223,38 @@ class Robot(abc.ABC):
     def disconnect(self) -> None:
         """Disconnect from the robot and perform any necessary cleanup."""
         pass
+
+    def attach_teleop(self, teleop: Any) -> None:
+        """Bind a teleoperator as a direct intent source.
+
+        Default: no-op. Chunk-aware / predictive robots override this to
+        wire their control-rate thread to ``teleop.get_action()`` so the
+        controller polls intent at its own native rate (e.g. 200 Hz)
+        instead of waiting for ``send_action`` pushes from the loop
+        driver (typically 30 Hz).
+
+        Must be called after both the robot and the teleop are connected.
+        The loop driver still calls ``robot.send_action`` for dataset
+        recording — when a teleop is attached on a predictive robot,
+        send_action becomes recording-only and does not influence motor
+        behaviour.
+
+        Detaching: call with ``teleop=None`` to clear the binding.
+        """
+        # Intentionally no-op in the base class. Robots that consume
+        # intent directly from a teleop (the predictive variants)
+        # override this method. The runtime-attribute typing avoids a
+        # circular import between Robot and Teleoperator.
+        return
+
+    def get_observation_processor_steps(self) -> list:
+        """
+        Return a list of observation processor steps to apply to robot observations.
+
+        This method can be overridden by robot subclasses to provide custom observation
+        processing (e.g., image preprocessing, filtering, transformations).
+
+        Returns:
+            list: A list of ObservationProcessorStep instances. Default is empty list (no processing).
+        """
+        return []
