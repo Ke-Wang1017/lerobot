@@ -1,0 +1,2 @@
+episode,replay_pct,rank,lr,steps,baseline_fit_val,baseline_forget,final_train_loss,final_fit_val,final_forget,fit_drop_pct,forget_drift_pct
+247,0.100000,16,0.000200,20,0.302442,0.019431,0.087485,0.100520,0.045486,66.763839,134.093922

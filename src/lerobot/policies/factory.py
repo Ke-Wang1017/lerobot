@@ -45,6 +45,7 @@ from lerobot.utils.constants import (
 from lerobot.utils.feature_utils import dataset_to_policy_features
 
 from .act.configuration_act import ACTConfig
+from .act_vlm.configuration_act_vlm import ACTWithVLMConfig
 from .diffusion.configuration_diffusion import DiffusionConfig
 from .eo1.configuration_eo1 import EO1Config
 from .evo1.configuration_evo1 import Evo1Config
@@ -99,8 +100,30 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         The policy class corresponding to the given name.
 
     Raises:
-        NotImplementedError: If the policy name is not recognized.
+        ImportError: If the policy's modeling module fails to import (typically a
+            missing transitive dep like `num2words` for SmolVLA). The error message
+            includes a ``uv pip install 'lerobot[<extra>]'`` hint computed from
+            :data:`_POLICY_NAME_TO_EXTRA`.
+        ValueError: If the policy name is not recognized.
     """
+    try:
+        return _get_policy_class_impl(name)
+    except ImportError as e:
+        extra = _POLICY_NAME_TO_EXTRA.get(name, _POLICY_FALLBACK_EXTRA)
+        # Re-raise as ImportError so callers can branch on the type;
+        # the install hint goes into the message so it surfaces in any
+        # generic stderr capture (including the GUI's log tail).
+        raise ImportError(
+            f"{e}\n"
+            f"Hint: policy '{name}' needs extra deps not present in this env. "
+            f"Install with: uv pip install 'lerobot[{extra}]' "
+            f"(or pip install 'lerobot[{extra}]')."
+        ) from e
+
+
+def _get_policy_class_impl(name: str) -> type[PreTrainedPolicy]:
+    """Original :func:`get_policy_class` body — kept private so the
+    public function can wrap ImportError uniformly with install hints."""
     if name == "tdmpc":
         from .tdmpc.modeling_tdmpc import TDMPCPolicy
 
@@ -113,6 +136,10 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from .act.modeling_act import ACTPolicy
 
         return ACTPolicy
+    elif name == "act_vlm":
+        from .act_vlm.modeling_act_vlm import ACTWithVLMPolicy
+
+        return ACTWithVLMPolicy
     elif name == "multi_task_dit":
         from .multi_task_dit.modeling_multi_task_dit import MultiTaskDiTPolicy
 
@@ -209,6 +236,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return DiffusionConfig(**kwargs)
     elif policy_type == "act":
         return ACTConfig(**kwargs)
+    elif policy_type == "act_vlm":
+        return ACTWithVLMConfig(**kwargs)
     elif policy_type == "multi_task_dit":
         return MultiTaskDiTConfig(**kwargs)
     elif policy_type == "vqbet":
@@ -364,6 +393,14 @@ def make_pre_post_processors(
         from .diffusion.processor_diffusion import make_diffusion_pre_post_processors
 
         processors = make_diffusion_pre_post_processors(
+            config=policy_cfg,
+            dataset_stats=kwargs.get("dataset_stats"),
+        )
+
+    elif isinstance(policy_cfg, ACTWithVLMConfig):
+        from lerobot.policies.act_vlm.processor_act_vlm import make_act_vlm_pre_post_processors
+
+        processors = make_act_vlm_pre_post_processors(
             config=policy_cfg,
             dataset_stats=kwargs.get("dataset_stats"),
         )
@@ -714,3 +751,112 @@ def _make_processors_from_policy_config(
     module = importlib.import_module(module_path)
     function = getattr(module, function_name)
     return function(config, dataset_stats=dataset_stats)
+
+
+# ── Registry health probe ──────────────────────────────────────────────────────
+
+# Maps registered policy name → the upstream pyproject.toml extra that owns
+# its deps. Used to print actionable "install with: uv pip install
+# 'lerobot[<extra>]'" hints in :func:`check_policy_registry_health` when a
+# policy's modeling module fails to import (typical cause: env missing a
+# transitive dep like `num2words` for SmolVLA). Only policies that have a
+# dedicated upstream extra are listed; others (act, sac, tdmpc, vqbet, rtc,
+# reward_classifier) fall back to ``all`` — those are policies without
+# special deps today, so an ImportError on them most likely means a base
+# dep is missing, which ``[all]`` covers. The map deliberately uses the
+# EXTRA name (pyproject convention) not the codebase dir name — see the
+# `wall_x` (dir) vs `wallx` (extra) discrepancy.
+_POLICY_NAME_TO_EXTRA: dict[str, str] = {
+    "diffusion": "diffusion",
+    "act_vlm": "all",  # no dedicated extra upstream; act_vlm needs transformers
+    "multi_task_dit": "multi_task_dit",
+    "pi0": "pi",
+    "pi0_fast": "pi",
+    "pi05": "pi",
+    "smolvla": "smolvla",
+    "sarm": "sarm",
+    "groot": "groot",
+    "xvla": "xvla",
+    "wall_x": "wallx",
+    "hilserl": "hilserl",
+    # Fall-throughs (any policy not listed defaults to `all`):
+    #   tdmpc, act, vqbet, sac, reward_classifier, rtc — no dedicated extra
+    #   in upstream pyproject.toml today; if one of these surfaces an
+    #   ImportError, the hint suggests `all` which covers everything.
+}
+
+# Fallback extra suggested when a policy isn't in :data:`_POLICY_NAME_TO_EXTRA`.
+# `all` is the kitchen sink — installs every policy's deps plus hardware
+# and benchmarks. Better than suggesting a non-existent extra.
+_POLICY_FALLBACK_EXTRA = "all"
+
+
+def check_policy_registry_health() -> dict[str, str | None]:
+    """Probe every registered policy's modeling module and report any that
+    fail to import in the current environment.
+
+    Returns ``{policy_name: None}`` for healthy policies (modeling module
+    importable) and ``{policy_name: error_message}`` for broken ones — the
+    error message includes the original ImportError text plus a
+    ``uv pip install 'lerobot[<extra>]'`` hint.
+
+    Used at CLI startup (``lerobot-record`` / ``lerobot-train``) and at GUI
+    server startup to surface "you trained a SmolVLA model but this env
+    doesn't have num2words" type drift BEFORE the user spends time picking
+    options that then crash at policy init.
+
+    The probe imports the modeling module via :func:`get_policy_class`,
+    which is what triggers the heavy deps (`transformers`, `diffusers`,
+    `num2words`, `flash-attn`, ...) — config imports are too cheap to
+    surface these issues.
+
+    Caveat: Cold-importing ~18 policy modeling modules touches every heavy
+    framework dep and takes seconds. Callers that care about startup
+    latency should run this in a background thread and consume the result
+    asynchronously.
+    """
+    from lerobot.configs.policies import PreTrainedConfig
+
+    health: dict[str, str | None] = {}
+    try:
+        names = sorted(PreTrainedConfig.get_known_choices().keys())
+    except Exception as e:
+        logging.warning(f"check_policy_registry_health: could not enumerate registry: {e!r}")
+        return health
+
+    for name in names:
+        try:
+            get_policy_class(name)
+            health[name] = None
+        except ImportError as e:
+            extra = _POLICY_NAME_TO_EXTRA.get(name, _POLICY_FALLBACK_EXTRA)
+            health[name] = (
+                f"{e}; install with: uv pip install 'lerobot[{extra}]' (or pip install 'lerobot[{extra}]')"
+            )
+        except Exception as e:
+            # Non-ImportError failure — registry/codebase bug, not env
+            # drift. Surface separately so the user doesn't get a
+            # misleading "install with..." hint.
+            health[name] = f"{type(e).__name__}: {e}"
+    return health
+
+
+def log_policy_registry_health(target: str = "this environment") -> None:
+    """Run :func:`check_policy_registry_health` and emit one ``logger.warning``
+    per unhealthy policy. Idempotent and safe to call at startup; non-fatal.
+
+    ``target`` is a human-readable label (e.g. ``"lerobot-record host"``)
+    included in the warning so the user can tell which env is missing
+    deps when multiple processes log into the same stream.
+    """
+    health = check_policy_registry_health()
+    unhealthy = {name: err for name, err in health.items() if err is not None}
+    if not unhealthy:
+        return
+    logger = logging.getLogger(__name__)
+    logger.warning(
+        f"{len(unhealthy)} registered polic{'y is' if len(unhealthy) == 1 else 'ies are'} "
+        f"unavailable in {target}:"
+    )
+    for name, err in unhealthy.items():
+        logger.warning(f"  {name}: {err}")
