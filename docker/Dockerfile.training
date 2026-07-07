@@ -1,0 +1,99 @@
+# Copyright 2026 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+# Training image for LeRobot. Derived from Dockerfile.internal but trimmed
+# to training-relevant extras.
+#
+# Usage:
+#   docker build -f docker/Dockerfile.training -t lerobot-training:dev .
+#   docker run --rm --gpus all --init \
+#     -v ~/.cache/huggingface:/home/user_lerobot/.cache/huggingface \
+#     -v $PWD/outputs:/lerobot/outputs \
+#     lerobot-training:dev \
+#     lerobot-train --policy.type=act --dataset.repo_id=lerobot/pusht --steps=10
+#
+# Signal handling: we rely on `docker run --init` (Docker's built-in tini)
+# to be PID 1. We do NOT set an ENTRYPOINT here — nesting our own tini
+# under Docker's --init tini produces a "Tini is not running as PID 1"
+# warning at runtime. Pick one: leave it to the docker invocation, which
+# is more portable across hosts and works correctly when our image is
+# pulled by tools that don't know about our internal conventions.
+
+ARG CUDA_VERSION=12.4.1
+ARG OS_VERSION=22.04
+FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu${OS_VERSION}
+
+ARG PYTHON_VERSION=3.12
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    MUJOCO_GL=egl \
+    PATH=/lerobot/.venv/bin:$PATH \
+    DEVICE=cuda
+
+# System deps + Python + uv.
+# Note: we don't install tini here — signal handling is delegated to
+# `docker run --init` which provides Docker's own minimal init as PID 1.
+# Nesting our own tini under that produced a runtime "Tini is not running
+# as PID 1" warning during the smoke test on 2026-06-04.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common build-essential git curl \
+    libglib2.0-0 libgl1-mesa-glx libegl1-mesa ffmpeg \
+    libgeos-dev cmake pkg-config ninja-build \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+       python${PYTHON_VERSION} \
+       python${PYTHON_VERSION}-venv \
+       python${PYTHON_VERSION}-dev \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && mv /root/.local/bin/uv /usr/local/bin/uv \
+    && useradd --create-home --shell /bin/bash user_lerobot \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /lerobot
+RUN chown -R user_lerobot:user_lerobot /lerobot
+USER user_lerobot
+
+ENV HOME=/home/user_lerobot \
+    HF_HOME=/home/user_lerobot/.cache/huggingface \
+    HF_LEROBOT_HOME=/home/user_lerobot/.cache/huggingface/lerobot \
+    TORCH_HOME=/home/user_lerobot/.cache/torch \
+    TRITON_CACHE_DIR=/home/user_lerobot/.cache/triton
+
+RUN uv venv --python python${PYTHON_VERSION}
+
+# Install Python deps in a cache-friendly layer: only re-runs when
+# pyproject.toml / uv.lock / source layout changes.
+COPY --chown=user_lerobot:user_lerobot setup.py pyproject.toml uv.lock README.md MANIFEST.in ./
+COPY --chown=user_lerobot:user_lerobot src/ src/
+
+# The single `training-image` extra (defined in pyproject.toml's fork-only
+# section) is the source of truth for "what this Docker image needs at
+# runtime". Adding a new policy = one line in `training-image`; this
+# Dockerfile is unchanged. Centralising the contract there means CI image
+# rebuilds pick up new policy deps automatically — no more SmolVLA-style
+# "I forgot --extra smolvla here" bugs.
+RUN uv sync --locked --extra training-image --no-cache
+
+# Build-time sanity check: every registered policy's modeling module must
+# import in this image. Catches mis-pinned transitive deps (e.g. a future
+# transformers bump dropping num2words) at BUILD time, where it costs
+# seconds of CI, instead of at the user's pod (where it costs GPU minutes
+# + pull/push wall-clock + cloud $). The probe lives in
+# lerobot.policies.factory and is shared with the GUI startup health check.
+RUN python -c "from lerobot.policies.factory import check_policy_registry_health as h; b={k:v for k,v in h().items() if v}; assert not b, f'unimportable policies in training image (build fails): {b}'"
+
+# Triton ptxas binary needs +x for some torch.compile paths
+RUN chmod +x /lerobot/.venv/lib/python${PYTHON_VERSION}/site-packages/triton/backends/nvidia/bin/ptxas || true
+
+# No ENTRYPOINT — `docker run --init` provides Docker's tini as PID 1.
+# That covers signal propagation without producing the "Tini is not
+# running as PID 1" warning we saw with a nested tini.
+
+# Default to bash; deploy scripts override with `lerobot-train ...`
+CMD ["/bin/bash"]

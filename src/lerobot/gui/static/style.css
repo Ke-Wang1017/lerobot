@@ -1,0 +1,1706 @@
+/* LeRobot Dataset GUI */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+
+/* Tab bar */
+.tab-bar { display: flex; background: #16213e; border-bottom: 1px solid #0f3460; padding: 0 16px; flex-shrink: 0; height: 44px; align-items: stretch; }
+.tab { padding: 0 24px; border: none; background: transparent; color: #888; cursor: pointer; font-family: inherit; font-size: 14px; font-weight: 500; letter-spacing: 0.3px; border-bottom: 2px solid transparent; transition: color 0.2s, border-color 0.2s, background 0.2s; line-height: 44px; -webkit-appearance: none; appearance: none; outline: none; }
+.tab:hover { color: #ccc; background: rgba(255,255,255,0.04); }
+.tab.active { color: #4fc3f7; border-bottom-color: #4fc3f7; }
+
+.bug-report-btn { align-self: center; margin-right: 4px; padding: 4px 12px; background: transparent; color: #888; border: 1px solid #2a4a6f; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 11px; transition: color 0.15s, border-color 0.15s, background 0.15s; }
+.bug-report-btn:hover { color: #ccc; border-color: #4fc3f7; background: rgba(79,195,247,0.08); }
+
+/* ── Hub transfers tray ─────────────────────────────────────────────────
+   Indicator lives in the tab bar; popover anchors top-right under the bar.
+   Indicator is hidden when no jobs exist; switches colour based on whether
+   anything is still in flight (cyan pulse = active, neutral = only finished). */
+.transfers-indicator {
+    align-self: center;
+    margin-right: 8px;
+    padding: 4px 10px;
+    background: transparent;
+    color: #888;
+    border: 1px solid #2a4a6f;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+/* Class selectors (above) outrank the user-agent `[hidden] { display: none }`
+   rule, so without this we'd render the indicator even when hidden=true. */
+.transfers-indicator[hidden] { display: none; }
+.transfers-indicator:hover { color: #ccc; border-color: #4fc3f7; background: rgba(79,195,247,0.08); }
+.transfers-indicator.active { color: #4fc3f7; border-color: #4fc3f7; }
+.transfers-indicator.active::before {
+    content: "";
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #4fc3f7;
+    box-shadow: 0 0 4px #4fc3f7;
+    animation: transfers-pulse 1.4s ease-in-out infinite;
+}
+@keyframes transfers-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+
+.transfers-popover {
+    position: fixed;
+    top: 48px;
+    right: 8px;
+    width: 360px;
+    max-height: calc(100vh - 64px);
+    overflow-y: auto;
+    background: #1e2a4a;
+    border: 1px solid #2a4a6f;
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    z-index: 2100;
+    font-size: 12px;
+    color: #ccc;
+}
+.transfers-popover-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid #2a4a6f;
+    font-weight: 600;
+    color: #ccc;
+}
+.transfers-clear-btn {
+    padding: 2px 8px;
+    background: transparent;
+    color: #888;
+    border: 1px solid #2a4a6f;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 10px;
+}
+.transfers-clear-btn:hover { color: #ccc; border-color: #4fc3f7; }
+.transfers-clear-btn:disabled { opacity: 0.4; cursor: default; }
+
+.transfers-list { padding: 4px; }
+.transfers-list:empty::after {
+    content: "No transfers";
+    display: block;
+    padding: 16px 12px;
+    color: #666;
+    text-align: center;
+    font-style: italic;
+}
+
+.transfer-card {
+    padding: 8px 10px;
+    margin: 4px 0;
+    background: #16213e;
+    border: 1px solid #2a4a6f;
+    border-radius: 4px;
+}
+.transfer-card.complete { border-color: rgba(152,195,121,0.4); }
+.transfer-card.failed { border-color: rgba(224,108,117,0.4); }
+.transfer-card.cancelled { border-color: rgba(229,192,123,0.4); }
+
+.transfer-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.transfer-direction { font-size: 11px; color: #888; }
+.transfer-repo {
+    color: #4fc3f7;
+    text-decoration: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+}
+.transfer-repo:hover { text-decoration: underline; }
+.transfer-action-btn {
+    background: transparent;
+    color: #888;
+    border: 1px solid #2a4a6f;
+    border-radius: 3px;
+    padding: 1px 6px;
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1.2;
+}
+.transfer-action-btn:hover { color: #ccc; border-color: #4fc3f7; }
+/* Destructive actions (Cancel active worker, Discard draft PR): tinted red
+   on rest AND hover, so they read distinctly from the neutral text labels
+   (Retry, Hide). */
+.transfer-action-btn.danger { color: #c97a82; border-color: #5a3a3f; }
+.transfer-action-btn.danger:hover { color: #e06c75; border-color: #e06c75; }
+/* Hide button on a completed card is pure UI dismissal — keep it neutral
+   (no red) and slightly more compact since it's just an X. */
+.transfer-action-btn.hide-btn { padding: 1px 5px; font-size: 12px; }
+
+.transfer-stats { font-size: 11px; color: #888; margin: 2px 0; }
+.transfer-stats .pct { float: right; }
+
+.transfer-card progress {
+    width: 100%;
+    height: 4px;
+    margin-top: 4px;
+}
+.transfer-current-file {
+    font-size: 10px;
+    color: #666;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.transfer-milestone {
+    /* Stage/milestone text from the worker — "Preparing PR", "Uploading
+       files", "Squashing history", etc. Slightly more prominent than the
+       current-file line since it's the human-readable status. */
+    font-size: 11px;
+    color: #aaa;
+    margin-top: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.transfer-actions {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: auto;
+}
+.transfer-msg.failed { color: #e06c75; font-size: 10px; margin-top: 4px; line-height: 1.3; }
+.transfer-msg.cancelled { color: #e5c07b; font-size: 10px; margin-top: 4px; line-height: 1.3; }
+.transfer-msg.complete { color: #98c379; font-size: 10px; margin-top: 4px; }
+
+/* Tab content */
+.tab-content { display: none; flex: 1; overflow: hidden; }
+.tab-content.active { display: flex; flex-direction: column; }
+
+.layout { display: flex; height: 100%; }
+
+/* Sidebar */
+.sidebar { width: 360px; min-width: 240px; background: #16213e; border-right: 1px solid #0f3460; display: flex; flex-direction: column; flex-shrink: 0; }
+.sidebar-resize-handle { width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; transition: background 0.15s; }
+.sidebar-resize-handle:hover, .sidebar-resize-handle.dragging { background: #4fc3f7; }
+.sidebar-header { padding: 16px; border-bottom: 1px solid #0f3460; }
+.sidebar-header h1 { font-size: 18px; color: #4fc3f7; margin-bottom: 12px; }
+
+/* Sidebar sections */
+.sidebar-section { border-bottom: 1px solid #0f3460; }
+.section-label { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+.section-label .btn-small { padding: 2px 8px; font-size: 11px; }
+/* Group multiple header actions (e.g. Training's Run/Host/Clear) on the
+   right so they read as one cluster, not spread across the row by the
+   parent's space-between. */
+.section-actions { display: flex; align-items: center; gap: 6px; }
+
+/* Sources section */
+.sources-section { max-height: 50%; overflow-y: auto; }
+.source-folder { }
+.source-folder-header { display: flex; align-items: center; padding: 6px 12px; cursor: pointer; gap: 4px; font-size: 12px; color: #aaa; }
+.source-folder-header:hover { background: #0f3460; }
+.source-folder-toggle { width: 14px; font-size: 9px; color: #666; flex-shrink: 0; }
+.source-folder-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.source-folder-count { font-size: 10px; color: #555; flex-shrink: 0; margin-left: 4px; }
+.source-folder-remove { color: #e74c3c; opacity: 0; cursor: pointer; padding: 0 4px; font-size: 14px; flex-shrink: 0; }
+.source-folder:hover .source-folder-remove { opacity: 0.6; }
+.source-folder-remove:hover { opacity: 1 !important; }
+.source-folder-children { display: none; }
+.source-folder-children.expanded { display: block; }
+.source-dataset { display: flex; align-items: center; padding: 4px 12px 4px 28px; cursor: pointer; gap: 6px; font-size: 12px; }
+.source-dataset:hover { background: #0f3460; }
+.source-dataset.active { color: #4fc3f7; }
+.source-dataset.active .source-dataset-name { color: #4fc3f7; }
+.source-dataset-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ccc; }
+.source-dataset-meta { font-size: 10px; color: #555; flex-shrink: 0; }
+.source-loading { padding: 6px 28px; font-size: 11px; color: #555; }
+.source-empty { padding: 6px 28px; font-size: 11px; color: #555; font-style: italic; }
+
+/* Opened section */
+.opened-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.tree-container { flex: 1; overflow-y: auto; padding: 4px 0; }
+
+/* Tree view */
+.tree-node { user-select: none; }
+.tree-header { display: flex; align-items: center; padding: 6px 12px; cursor: pointer; gap: 6px; }
+.tree-header:hover { background: #0f3460; }
+.tree-header.active { background: #1a4a7a; }
+.tree-header.deleted { opacity: 0.5; text-decoration: line-through; }
+.tree-header.trimmed .tree-label::after { content: ' ✂'; color: #f39c12; }
+.tree-header.quality-warning { color: #f39c12; }
+.tree-toggle { width: 16px; font-size: 10px; color: #888; flex-shrink: 0; }
+.tree-icon { width: 16px; text-align: center; flex-shrink: 0; }
+.tree-label { flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree-meta { font-size: 11px; color: #666; flex-shrink: 0; }
+.tree-close { color: #888; opacity: 0; cursor: pointer; padding: 0 4px; font-size: 16px; flex-shrink: 0; line-height: 1; }
+.tree-header:hover .tree-close { opacity: 0.6; }
+.tree-close:hover { opacity: 1 !important; color: #e74c3c; }
+.tree-children { display: none; }
+.tree-children.expanded { display: block; }
+.tree-children .tree-header { padding-left: 28px; }
+
+/* Context menu */
+.context-menu { position: fixed; background: #16213e; border: 1px solid #0f3460; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 1000; min-width: 150px; display: none; }
+.context-menu.visible { display: block; }
+.context-menu-item { padding: 8px 16px; cursor: pointer; font-size: 13px; }
+.context-menu-item:hover { background: #0f3460; }
+.context-menu-item.danger { color: #e74c3c; }
+.context-menu-item.danger:hover { background: #c0392b; color: #fff; }
+.context-menu-separator { height: 1px; background: #0f3460; margin: 4px 0; }
+
+/* Edits panel */
+.edits-bar { background: #1a3a5c; border-top: 1px solid #0f3460; padding: 8px 16px; display: none; align-items: center; gap: 12px; }
+.edits-bar.visible { display: flex; }
+.edits-count { font-size: 13px; color: #f39c12; flex: 1; }
+.edits-bar button { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; font-size: 12px; }
+.edits-bar .btn-save { background: #27ae60; color: #fff; }
+.edits-bar .btn-save:hover { background: #2ecc71; }
+.edits-bar .btn-discard { background: #e74c3c; color: #fff; }
+.edits-bar .btn-discard:hover { background: #c0392b; }
+.edits-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Toast notifications */
+.toast-container { position: fixed; top: 20px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+.toast { background: #1a3a5c; border: 1px solid #0f3460; border-radius: 8px; padding: 12px 16px; color: #fff; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); animation: toast-in 0.3s ease-out; max-width: 350px; }
+.toast.warning { border-left: 4px solid #f39c12; }
+.toast.info { border-left: 4px solid #4fc3f7; }
+.toast.success { border-left: 4px solid #27ae60; }
+.toast.error { border-left: 4px solid #e74c3c; }
+.toast-title { font-weight: 600; margin-bottom: 4px; }
+.toast-message { color: #aaa; font-size: 12px; }
+@keyframes toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes toast-out { from { opacity: 1; } to { opacity: 0; } }
+
+/* Main content */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* Camera grid */
+.camera-grid { flex: 1; display: grid; gap: 8px; padding: 16px; overflow: auto; }
+.camera-panel { background: #16213e; border-radius: 8px; display: flex; flex-direction: column; min-height: 200px; }
+.camera-title { padding: 8px 12px; font-size: 12px; color: #888; border-bottom: 1px solid #0f3460; }
+.camera-frame { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 0 0 8px 8px; overflow: hidden; }
+.camera-frame img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+/* Controls */
+.controls-bar { background: #16213e; border-top: 1px solid #0f3460; padding: 12px 16px; display: flex; align-items: center; gap: 12px; }
+.controls-bar button { padding: 8px 16px; border-radius: 4px; border: none; background: #4fc3f7; color: #000; cursor: pointer; font-size: 14px; }
+.controls-bar button:hover { background: #81d4fa; }
+.speed-select { padding: 6px 8px; border-radius: 4px; border: none; background: #0f3460; color: #fff; font-size: 12px; cursor: pointer; }
+.timeline-container { flex: 1; position: relative; padding: 8px 0; }
+.timeline { height: 8px; background: #0f3460; border-radius: 4px; cursor: pointer; position: relative; }
+.timeline-progress { height: 100%; background: #4fc3f7; border-radius: 4px; width: 0%; pointer-events: none; }
+.timeline-scrubber { position: absolute; top: 50%; width: 16px; height: 16px; background: #fff; border-radius: 50%; transform: translate(-50%, -50%); cursor: grab; box-shadow: 0 2px 4px rgba(0,0,0,0.3); pointer-events: auto; }
+.timeline-scrubber:active { cursor: grabbing; }
+.timeline-scrubber:hover { transform: translate(-50%, -50%) scale(1.2); }
+.timeline-hover { position: absolute; bottom: 100%; left: 0; background: #0f3460; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 11px; transform: translateX(-50%); white-space: nowrap; opacity: 0; pointer-events: none; margin-bottom: 8px; }
+.timeline-container:hover .timeline-hover { opacity: 1; }
+
+/* Trim handles */
+.trim-region { position: absolute; top: -4px; bottom: -4px; background: rgba(76, 175, 80, 0.25); border-left: 3px solid #4caf50; border-right: 3px solid #4caf50; pointer-events: none; display: none; z-index: 5; overflow: visible; }
+.trim-region.visible { display: block; }
+/* Cut zones - red tint for regions that will be removed */
+.trim-cut-left, .trim-cut-right { position: absolute; top: -4px; bottom: -4px; background: rgba(244, 67, 54, 0.3); pointer-events: none; display: none; z-index: 4; }
+.trim-cut-left.visible, .trim-cut-right.visible { display: block; }
+.trim-cut-left { left: 0; }
+.trim-cut-right { right: 0; }
+.trim-handle { position: absolute; top: 50%; width: 20px; height: 28px; cursor: ew-resize; z-index: 20; pointer-events: auto; background: transparent; transform: translateY(-50%); }
+.trim-handle::before { content: ''; position: absolute; top: 50%; left: 50%; width: 6px; height: 24px; background: #4caf50; border-radius: 3px; transform: translate(-50%, -50%); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+.trim-handle:hover::before { background: #66bb6a; transform: translate(-50%, -50%) scaleY(1.1); }
+.trim-handle.left { left: -10px; }
+.trim-handle.right { right: -10px; }
+.trim-controls { display: flex; align-items: center; gap: 8px; margin-left: 12px; visibility: hidden; min-width: 220px; }
+.trim-controls.visible { visibility: visible; }
+.trim-controls button { padding: 4px 10px; border-radius: 4px; border: none; font-size: 11px; cursor: pointer; background: #555; color: #fff; }
+.trim-controls button:hover { background: #666; }
+.trim-info { font-size: 11px; color: #f39c12; }
+
+.frame-info { font-size: 13px; color: #888; min-width: 140px; text-align: right; }
+.time-info { font-size: 11px; color: #666; }
+.status { font-size: 12px; color: #666; min-width: 150px; text-align: right; }
+
+/* Empty state */
+.empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: #666; font-size: 14px; }
+
+/* Robot tab */
+.robot-section { border-bottom: 1px solid #0f3460; }
+.section-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; font-size: 13px; color: #aaa; }
+.btn-small { padding: 4px 10px; border-radius: 4px; border: none; background: #4fc3f7; color: #000; cursor: pointer; font-size: 11px; }
+.btn-small:hover { background: #81d4fa; }
+.btn-small:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-small.secondary { background: #555; color: #fff; }
+.btn-small.secondary:hover { background: #666; }
+.btn-small.danger { background: #c0392b; color: #fff; }
+.btn-small.danger:hover { background: #e74c3c; }
+.profile-list { max-height: 250px; overflow-y: auto; }
+.profile-item { padding: 8px 12px; cursor: pointer; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+.profile-item:hover { background: #0f3460; }
+.profile-item.active { background: #1a4a7a; }
+.profile-type { font-size: 11px; color: #666; margin-left: 6px; }
+.profile-delete { color: #e74c3c; opacity: 0; cursor: pointer; padding: 2px 6px; font-size: 16px; }
+.profile-item:hover .profile-delete { opacity: 1; }
+
+/* Robot editor */
+.robot-editor { padding: 24px; overflow-y: auto; flex: 1; }
+.editor-header { margin-bottom: 20px; }
+.editor-header-row { display: flex; align-items: center; gap: 12px; }
+.editor-header h2 { font-size: 18px; color: #4fc3f7; margin: 0; }
+.editor-form { display: grid; grid-template-columns: 270px 1fr; gap: 8px 16px; align-items: center; margin-bottom: 24px; max-width: 700px; }
+.editor-form label { font-size: 13px; color: #aaa; text-align: right; }
+.editor-form input, .editor-form select { padding: 6px 10px; border-radius: 4px; border: 1px solid #0f3460; background: #0f3460; color: #fff; font-size: 13px; }
+.editor-form input:focus, .editor-form select:focus { outline: none; border-color: #4fc3f7; }
+
+/* Camera preview */
+.camera-detect-section { margin-top: 24px; padding-top: 16px; border-top: 1px solid #0f3460; max-width: 900px; }
+.camera-detect-section h3 { color: #4fc3f7; font-size: 14px; margin-bottom: 8px; }
+.camera-detect-actions { display: flex; gap: 8px; margin-bottom: 12px; }
+.camera-preview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 12px; }
+.camera-preview-card { background: #16213e; border-radius: 8px; overflow: hidden; border: 1px solid #0f3460; }
+.camera-preview-card img { width: 100%; aspect-ratio: 4/3; object-fit: cover; background: #000; display: block; }
+.camera-preview-info { padding: 8px 12px; font-size: 12px; color: #aaa; }
+.camera-preview-info .cam-meta { color: #666; font-size: 11px; margin-top: 2px; }
+.camera-preview-info select { margin-top: 6px; width: 100%; padding: 4px 8px; border-radius: 4px; border: 1px solid #0f3460; background: #0f3460; color: #fff; font-size: 12px; }
+.camera-assigned { padding: 8px 12px; background: #16213e; border-radius: 4px; margin-bottom: 4px; font-size: 13px; }
+.camera-assigned .cam-header { display: flex; align-items: center; gap: 8px; }
+.camera-assigned .cam-role { color: #4fc3f7; font-weight: 600; min-width: 100px; }
+.camera-assigned .cam-info { color: #aaa; font-size: 12px; flex: 1; }
+.camera-assigned .cam-remove { color: #e74c3c; cursor: pointer; padding: 2px 6px; opacity: 0.6; }
+.camera-assigned .cam-remove:hover { opacity: 1; }
+.cam-config { display: flex; gap: 12px; margin-top: 6px; padding-left: 108px; }
+.cam-config label { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #888; }
+.cam-config input { width: 64px; padding: 3px 6px; border-radius: 3px; border: 1px solid #0f3460; background: #0f3460; color: #fff; font-size: 11px; }
+.cam-config select { padding: 3px 6px; border-radius: 3px; border: 1px solid #0f3460; background: #0f3460; color: #fff; font-size: 11px; }
+
+/* Port scanning */
+.port-section { margin-top: 24px; padding-top: 16px; border-top: 1px solid #0f3460; max-width: 700px; }
+.port-section h3 { color: #4fc3f7; font-size: 14px; margin-bottom: 8px; }
+.port-list { margin-top: 8px; display: grid; grid-template-columns: 140px 1fr 80px 160px auto; column-gap: 12px; row-gap: 4px; align-items: center; font-size: 13px; }
+.port-item { display: contents; }
+.port-item > * { padding: 8px 0; }
+.port-item > :first-child { padding-left: 12px; }
+.port-item > :last-child { padding-right: 12px; }
+.port-path { color: #4fc3f7; font-family: monospace; }
+.port-name { color: #aaa; font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.port-item .btn-small.wiggling { background: #f39c12; color: #000; cursor: not-allowed; }
+.port-assign-select { padding: 4px 8px; border-radius: 4px; border: 1px solid #0f3460; background: #0f3460; color: #fff; font-size: 12px; width: 100%; }
+.port-assign-select:focus { outline: none; border-color: #4fc3f7; }
+.port-assign-select:disabled { color: #888; cursor: default; }
+.port-assign-select.port-assign-claimed { border-color: #f39c12; }
+.port-claimed { color: #f39c12; font-size: 12px; white-space: nowrap; }
+.port-claimed a { color: #4fc3f7; cursor: pointer; text-decoration: underline; }
+.port-claimed a:hover { color: #81d4fa; }
+
+/* Rest position section */
+.rest-position-section { margin-top: 24px; padding-top: 16px; border-top: 1px solid #0f3460; max-width: 700px; }
+.rest-position-section h3 { color: #4fc3f7; font-size: 14px; margin-bottom: 8px; }
+.rest-position-empty { color: #666; font-size: 13px; padding: 8px 0; }
+.rest-position-values { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.rest-pos-entry { display: inline-flex; align-items: center; gap: 4px; background: #0f3460; border-radius: 4px; padding: 4px 8px; font-size: 12px; }
+.rest-pos-label { color: #888; }
+.rest-pos-value { color: #4fc3f7; font-variant-numeric: tabular-nums; }
+.rest-position-actions { display: flex; gap: 8px; margin-top: 8px; }
+.rest-position-status { color: #888; font-size: 12px; margin-top: 6px; min-height: 18px; }
+
+/* Editor actions (save/discard bar — only visible when dirty) */
+.editor-actions { margin-top: 24px; padding: 12px 16px; border-top: 1px solid #0f3460; display: flex; gap: 12px; align-items: center; background: rgba(39,174,96,0.08); border-radius: 4px; }
+.btn-save { padding: 8px 20px; border-radius: 4px; border: none; background: #27ae60; color: #fff; cursor: pointer; font-size: 13px; }
+.btn-save:hover { background: #2ecc71; }
+.btn-discard { padding: 8px 20px; border-radius: 4px; border: none; background: #555; color: #fff; cursor: pointer; font-size: 13px; }
+.btn-discard:hover { background: #666; }
+
+/* Run tab */
+.run-workflow-selector { display: flex; border-bottom: 1px solid #0f3460; }
+.workflow-btn { flex: 1; padding: 10px; border: none; background: transparent; color: #888; cursor: pointer; font-size: 13px; border-bottom: 2px solid transparent; transition: color 0.2s, border-color 0.2s; }
+.workflow-btn:hover { color: #ccc; background: rgba(255,255,255,0.04); }
+.workflow-btn.active { color: #4fc3f7; border-bottom-color: #4fc3f7; }
+.workflow-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.run-form { padding: 16px; overflow-y: auto; overflow-x: hidden; flex: 1; min-width: 0; }
+.run-form .form-grid { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 8px 12px; align-items: center; align-content: start; }
+.run-form label { font-size: 13px; color: #aaa; text-align: right; }
+.run-form input, .run-form select, .run-form textarea { padding: 6px 10px; border-radius: 4px; border: 1px solid #0f3460; background: #0f3460; color: #fff; font-size: 13px; max-width: 100%; }
+.run-form input[type="checkbox"] { width: auto; justify-self: start; padding: 0; background: none; border: none; }
+.run-form select { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-form input:focus, .run-form select:focus { outline: none; border-color: #4fc3f7; }
+.run-form input:disabled, .run-form select:disabled { opacity: 0.5; }
+.run-form .form-section { margin-top: 16px; padding-top: 12px; border-top: 1px solid #0f3460; }
+.run-form .form-section-title { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.dataset-conflict-warning { font-size: 11px; color: #f39c12; margin-top: 4px; }
+.form-hint { font-size: 11px; color: #666; margin-top: 2px; }
+/* Marker shown after the label of every required field. Bumping the CSS
+ * version (style.css?v=N in index.html) is required when shipping new
+ * styles like this so old browser caches don't render the form
+ * inconsistently. */
+.required-marker { color: #d33; margin-left: 2px; }
+.policy-task-open-prompt { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+
+.run-actions { padding: 12px 16px; border-top: 1px solid #0f3460; display: flex; gap: 12px; }
+.btn-launch { flex: 1; padding: 10px; border-radius: 4px; border: none; background: #27ae60; color: #fff; cursor: pointer; font-size: 14px; font-weight: 600; }
+.btn-launch:hover { background: #2ecc71; }
+.btn-launch:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-stop { flex: 1; padding: 10px; border-radius: 4px; border: none; background: #e74c3c; color: #fff; cursor: pointer; font-size: 14px; font-weight: 600; }
+.btn-stop:hover { background: #c0392b; }
+.btn-stop:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* Run tab main area */
+.run-main-split { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+.rerun-viewer { flex: 3; min-height: 200px; border: none; background: #0a0a1a; position: relative; }
+.rerun-placeholder { display: flex; align-items: center; justify-content: center; color: #444; font-size: 13px; height: 100%; }
+
+/* TODO: generalize — currently HVLA S2 subtask only. See index.html TODO. */
+.debug-model-overlay {
+    display: none;
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    font-size: 42px;
+    font-weight: 600;
+    padding: 8px 24px;
+    border-radius: 8px;
+    z-index: 10;
+    pointer-events: none;
+    max-width: 80%;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: opacity 0.3s;
+}
+
+.run-split-handle { height: 6px; background: #0f3460; cursor: row-resize; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.run-split-handle:hover, .run-split-handle.dragging { background: #4fc3f7; }
+.run-split-handle::after { content: ''; width: 40px; height: 2px; background: #555; border-radius: 1px; }
+.run-split-handle:hover::after { background: #000; }
+
+.run-terminal-container { flex: 1; min-height: 80px; display: flex; flex-direction: column; overflow: hidden; }
+.run-bottom-tabs { display: flex; gap: 0; background: #0d1b2a; border-bottom: 1px solid #0f3460; flex-shrink: 0; padding-left: 8px; }
+.run-bottom-tab { background: transparent; border: none; color: #666; font-size: 12px; padding: 6px 16px; cursor: pointer; border-bottom: 2px solid transparent; }
+.run-bottom-tab:hover { color: #aaa; }
+.run-bottom-tab.active { color: #4fc3f7; border-bottom-color: #4fc3f7; }
+.run-bottom-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.rlt-dashboard { flex: 1; display: flex; flex-direction: column; overflow-y: auto; background: #0a0a1a; padding: 8px; }
+.rlt-status-bar { display: flex; gap: 16px; padding: 6px 12px; background: #16213e; border-radius: 4px; margin-bottom: 8px; flex-shrink: 0; flex-wrap: wrap; }
+.rlt-stat { font-size: 11px; color: #888; }
+.rlt-stat b { color: #e0e0e0; }
+.rlt-controls { display: flex; gap: 20px; padding: 6px 12px; background: #16213e; border-radius: 4px; margin-bottom: 8px; flex-shrink: 0; align-items: center; }
+.rlt-slider-label { font-size: 11px; color: #888; display: flex; align-items: center; gap: 8px; }
+.rlt-slider-label input[type="range"] { width: 120px; accent-color: #4fc3f7; }
+.rlt-slider-label span { color: #e0e0e0; font-weight: bold; min-width: 40px; font-family: monospace; }
+.rlt-charts { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; flex: 1; }
+.rlt-btn { font-size: 11px; padding: 3px 10px; border-radius: 3px; border: 1px solid #2a3450; background: #1a2440; color: #aaa; cursor: pointer; font-family: inherit; }
+.rlt-btn:hover { background: #263252; color: #fff; }
+.rlt-btn.active { background: #e74c3c; color: #fff; border-color: #c0392b; }
+.rlt-slider-label input[type="range"]:disabled,
+.rlt-slider-label input[type="range"].disabled { opacity: 0.4; cursor: not-allowed; }
+.rlt-chart-box { background: #111; border: 1px solid #1a1a3e; border-radius: 4px; padding: 6px; display: flex; flex-direction: column; }
+.rlt-chart-title { font-size: 10px; color: #666; margin-bottom: 2px; }
+.rlt-chart-box canvas { width: 100% !important; flex: 1; min-height: 40px; max-height: 80px; }
+
+/* Latency dashboard — same visual language as the RL dashboard. */
+.latency-dashboard { flex: 1; display: flex; flex-direction: column; overflow-y: auto; background: #0a0a1a; padding: 8px; gap: 12px; }
+.latency-track { display: flex; flex-direction: column; gap: 6px; padding: 8px; background: #08081a; border: 1px solid #14143a; border-radius: 6px; }
+.latency-track-header { font-size: 11px; color: #4fc3f7; font-family: monospace; letter-spacing: 0.5px; padding: 2px 4px 6px; border-bottom: 1px solid #14143a; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.latency-track-health { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-family: monospace; cursor: help; }
+.latency-track-health.warn { background: #3b2f0a; color: #f1c40f; border: 1px solid #6e5612; }
+.latency-track-health.error { background: #3b0a0a; color: #ff6b6b; border: 1px solid #6e1212; }
+.latency-section { display: flex; flex-direction: column; gap: 4px; }
+.latency-section-title { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; padding: 0 4px; }
+.latency-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 6px; }
+.latency-card { background: #111; border: 1px solid #1a1a3e; border-radius: 4px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; min-height: 70px; }
+.latency-card-title { font-size: 10px; color: #888; }
+.latency-card-value { font-size: 16px; font-family: monospace; }
+.latency-card-p50 { color: #b0b0b0; }
+.latency-card-p95 { color: #e0e0e0; font-size: 14px; }
+.latency-card-p95.ok { color: #2ecc71; }
+.latency-card-p95.warn { color: #f1c40f; }
+.latency-card-p95.bad { color: #e74c3c; }
+.latency-card-sub { font-size: 10px; color: #666; font-family: monospace; }
+.latency-card canvas { width: 100% !important; height: 28px !important; }
+.latency-cam-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px; }
+.latency-cam-card { background: #111; border: 1px solid #1a1a3e; border-radius: 4px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+.latency-cam-card-title { font-size: 11px; color: #ccc; font-weight: 600; }
+.latency-cam-stat { display: flex; justify-content: space-between; font-size: 11px; color: #888; font-family: monospace; }
+.latency-cam-stat b { color: #e0e0e0; font-weight: normal; }
+.latency-empty { padding: 12px; color: #666; font-size: 11px; font-style: italic; grid-column: 1 / -1; }
+.latency-meta { display: flex; gap: 16px; padding: 4px 8px; font-size: 10px; color: #555; font-family: monospace; }
+.latency-meta span { white-space: nowrap; }
+
+/* Per-camera overlay drawn on top of each live camera tile in the obs
+   stream viewer. Small, semi-transparent, top-right corner so it doesn't
+   compete with the existing top-left camera-key label. */
+.cam-latency-overlay {
+    position: absolute; top: 4px; right: 6px;
+    padding: 2px 6px; border-radius: 3px;
+    background: rgba(0,0,0,0.55);
+    font-family: monospace; font-size: 10px; line-height: 1.25;
+    pointer-events: none;
+    text-align: right;
+    color: #ddd;
+}
+.cam-latency-overlay.ok   { color: #2ecc71; }
+.cam-latency-overlay.warn { color: #f1c40f; }
+.cam-latency-overlay.bad  { color: #e74c3c; }
+.cam-latency-line { white-space: nowrap; }
+
+/* Per-iteration Gantt panel. */
+.latency-gantt-controls { float: right; display: flex; gap: 8px; align-items: center; font-size: 10px; color: #888; }
+.latency-gantt-controls select { background: #16213e; color: #ddd; border: 1px solid #2a3450; border-radius: 3px; font-size: 10px; padding: 2px 6px; }
+.latency-gantt-controls #latency-gantt-meta { font-family: monospace; }
+.latency-gantt-panel { background: #111; border: 1px solid #1a1a3e; border-radius: 4px; padding: 8px; position: relative; min-height: 210px; display: flex; gap: 12px; align-items: stretch; }
+.latency-gantt-canvas-wrap { flex: 1; min-width: 0; }
+.latency-gantt-panel canvas { width: 100% !important; height: 210px !important; display: block; }
+.latency-gantt-panel .latency-empty { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+.latency-gantt-legend { flex: 0 0 auto; min-width: 130px; max-width: 200px; display: flex; flex-direction: column; gap: 3px; padding: 2px 4px; font-size: 10px; font-family: monospace; color: #aaa; }
+.latency-gantt-legend-item { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.latency-gantt-legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+.latency-gantt-legend-dur { color: #ddd; margin-left: auto; }
+.latency-gantt-legend-cam { display: flex; align-items: center; gap: 6px; color: #888; font-size: 10px; margin-top: 6px; padding-top: 4px; border-top: 1px solid #1a1a3e; }
+.latency-gantt-legend-cam-marker { color: #4fc3f7; font-size: 12px; line-height: 1; }
+.run-terminals-split { flex: 1; display: flex; flex-direction: row; overflow: hidden; }
+.run-terminal-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.run-terminal-panel + .run-terminal-panel { border-left: 1px solid #0f3460; }
+.run-terminal-header { padding: 6px 16px; background: #16213e; border-bottom: 1px solid #0f3460; display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #aaa; flex-shrink: 0; gap: 8px; }
+.terminal-actions { display: flex; gap: 4px; margin-left: auto; }
+.btn-terminal { background: transparent; border: 1px solid #333; color: #888; font-size: 11px; padding: 1px 8px; border-radius: 3px; cursor: pointer; }
+.btn-terminal:hover { background: #1a1a2e; color: #ccc; border-color: #555; }
+.run-terminal { flex: 1; background: #0a0a1a; padding: 12px 16px; overflow-y: auto; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; line-height: 1.5; }
+.terminal-line { white-space: pre-wrap; word-break: break-all; color: #ccc; }
+.terminal-line.stderr-error { color: #e74c3c; }
+.terminal-line.stderr-warn { color: #f39c12; }
+.terminal-line.stderr-info { color: #888; }
+.terminal-line.system { color: #4fc3f7; }
+
+.run-status { font-size: 12px; padding: 2px 10px; border-radius: 10px; }
+.run-status.idle { color: #888; background: rgba(255,255,255,0.05); }
+.run-status.running { color: #27ae60; background: rgba(39,174,96,0.15); animation: pulse-status 2s ease-in-out infinite; }
+@keyframes pulse-status { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+/* Model tab */
+#model-sidebar .sources-section { max-height: none; flex: 1; overflow-y: auto; }
+.model-detail { padding: 24px; overflow-y: auto; height: 100%; }
+.model-detail-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.model-detail-header h2 { font-size: 18px; font-weight: 600; color: #eee; }
+
+.model-tabs { display: flex; gap: 0; border-bottom: 1px solid #0f3460; margin-bottom: 16px; }
+.model-tab { padding: 8px 16px; border: none; background: transparent; color: #888; cursor: pointer; font-family: inherit; font-size: 13px; border-bottom: 2px solid transparent; }
+.model-tab:hover { color: #ccc; }
+.model-tab.active { color: #4fc3f7; border-bottom-color: #4fc3f7; }
+.model-tab-content { display: none; }
+.model-tab-content.active { display: block; }
+
+.model-policy-badge { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.model-link { color: #4fc3f7; text-decoration: none; }
+.model-link:hover { text-decoration: underline; }
+
+.model-info-grid { display: flex; flex-direction: column; gap: 2px; max-width: 500px; }
+.model-info-row { display: flex; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.model-info-label { width: 130px; flex-shrink: 0; color: #888; font-size: 13px; }
+.model-info-value { color: #ccc; font-size: 13px; }
+
+.model-config { max-width: 700px; }
+.model-config-section { margin-bottom: 12px; border: 1px solid #0f3460; border-radius: 6px; overflow: hidden; }
+.model-config-section.collapsed .model-config-body { display: none; }
+.model-config-title { padding: 8px 12px; background: #16213e; font-size: 13px; font-weight: 600; color: #aaa; cursor: pointer; user-select: none; }
+.model-config-title:hover { background: #1a2848; }
+.model-config-body { padding: 4px 0; }
+.model-config-row { display: flex; padding: 3px 12px; font-size: 12px; }
+.model-config-key { width: 200px; flex-shrink: 0; color: #888; font-family: 'SF Mono', 'Fira Code', monospace; }
+.model-config-val { color: #ccc; font-family: 'SF Mono', 'Fira Code', monospace; word-break: break-all; }
+.model-no-config { color: #666; font-size: 13px; padding: 16px 0; }
+
+.model-ckpt-table { width: 100%; max-width: 700px; border-collapse: collapse; font-size: 13px; }
+.model-ckpt-table th { text-align: left; padding: 8px 12px; color: #888; border-bottom: 1px solid #0f3460; font-weight: 500; }
+.model-ckpt-table td { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.04); color: #ccc; }
+.model-ckpt-table tr:hover td { background: rgba(255,255,255,0.02); }
+.model-ckpt-actions { display: flex; gap: 6px; }
+.model-last-badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: rgba(79,195,247,0.15); color: #4fc3f7; }
+.btn-tiny { padding: 2px 8px; font-size: 11px; border: 1px solid #0f3460; background: transparent; color: #aaa; border-radius: 4px; cursor: pointer; }
+.btn-tiny:hover { background: #0f3460; color: #eee; }
+.btn-tiny.btn-accent { border-color: #4fc3f7; color: #4fc3f7; }
+.btn-tiny.btn-accent:hover { background: #4fc3f7; color: #111; }
+.btn-tiny:disabled, .btn-tiny.btn-accent:disabled { opacity: 0.4; cursor: not-allowed; border-color: #2a2a3a; color: #555; background: transparent; }
+.btn-tiny:disabled:hover, .btn-tiny.btn-accent:disabled:hover { background: transparent; color: #555; }
+
+/* Merge diff panel */
+.merge-diff-header { font-weight: bold; color: #e5c07b; margin-bottom: 6px; font-size: 12px; }
+.merge-diff-section { margin-bottom: 6px; }
+.merge-diff-label { color: #999; font-weight: 600; }
+.merge-diff-removed { background: rgba(220,50,47,0.15); color: #e06c75; padding: 1px 5px; border-radius: 3px; margin: 2px 3px; display: inline-block; }
+.merge-diff-added { background: rgba(80,180,80,0.15); color: #98c379; padding: 1px 5px; border-radius: 3px; margin: 2px 3px; display: inline-block; }
+.merge-diff-json { font-family: monospace; font-size: 10px; margin: 4px 0; }
+.merge-diff-json pre { margin: 2px 0; white-space: pre-wrap; word-break: break-all; }
+#merge-diff-panel details { margin: 2px 0; }
+#merge-diff-panel summary { cursor: pointer; color: #61afef; }
+#merge-diff-panel summary:hover { text-decoration: underline; }
+
+/* ============================================================================
+   Feature Editing — Phase B layout
+   ============================================================================ */
+
+/* Inspector panel (right sidebar). Always visible when a dataset is open;
+   toggled off via display:none from JS when no dataset is loaded. */
+.inspector {
+    width: 320px;
+    min-width: 220px;
+    max-width: 600px;
+    background: #16213e;
+    border-left: 1px solid #0f3460;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+.inspector-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid #0f3460;
+}
+.inspector-header h2 {
+    font-size: 14px;
+    color: #4fc3f7;
+    margin: 0;
+}
+.inspector-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 14px;
+    font-size: 12px;
+    color: #ddd;
+}
+.inspector-body .empty-state {
+    color: #888;
+    font-style: italic;
+    padding: 8px 0;
+}
+.inspector-summary {
+    color: #aaa;
+    line-height: 1.6;
+}
+.inspector-summary .summary-key { color: #888; }
+.inspector-summary .summary-value { color: #ddd; }
+
+/* Inspector section header — used twice (Episode N + Frames N…M). */
+.inspector-section-header {
+    padding: 8px 0;
+    border-bottom: 1px solid #0f3460;
+    margin: 16px 0 8px 0;
+}
+.inspector-section-header:first-child { margin-top: 0; }
+.inspector-section-header .sel-title { font-weight: 600; color: #f39c12; }
+.inspector-section-header .sel-meta { color: #888; font-size: 11px; margin-top: 2px; }
+
+.feature-card {
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    background: #1a2a44;
+}
+.feature-card.focused {
+    border-color: #f39c12;
+    box-shadow: 0 0 0 1px #f39c12;
+}
+.feature-card.readonly { background: #1a1f30; opacity: 0.85; }
+.feature-card .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+/* Right-side group of card-header: dtype + delete-✕. Grouped so the
+   ✕ sits next to the dtype rather than absolute-positioned and
+   overlapping it (user-reported overlap on the previous design). */
+.feature-card .card-header-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+/* Inspector-card delete (✕). Mirrors the per-row ✕ on the timeline,
+   provides the only delete affordance for per-episode features
+   (which are hidden from the timeline rows by default unless pinned). */
+.feature-card .card-delete-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #888;
+    width: 18px;
+    height: 18px;
+    line-height: 16px;
+    padding: 0;
+    border-radius: 3px;
+    font-size: 11px;
+    cursor: pointer;
+    opacity: 0.3;
+    transition: opacity 0.1s, color 0.1s, border-color 0.1s, background 0.1s;
+    flex-shrink: 0;
+}
+.feature-card:hover .card-delete-btn { opacity: 1; }
+.feature-card .card-delete-btn:hover {
+    color: #e57373;
+    border-color: #e57373;
+    background: #2a1a1a;
+    opacity: 1;
+}
+.feature-card .card-name { color: #4fc3f7; font-weight: 600; }
+.feature-card .card-dtype { color: #888; font-size: 10px; }
+.feature-card .card-pending { color: #f39c12; font-size: 10px; margin-left: 6px; }
+.feature-card .card-observed-range {
+    color: #888;
+    font-size: 10px;
+    font-weight: normal;
+    margin-left: 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.feature-card .card-broadcast-note {
+    color: #b58900;
+    font-size: 10px;
+    font-style: italic;
+    background: rgba(243, 156, 18, 0.10);
+    border-left: 2px solid #f39c12;
+    padding: 4px 6px;
+    margin: 4px 0 6px 0;
+    border-radius: 2px;
+}
+.feature-card .card-readonly-tag {
+    color: #888;
+    font-size: 10px;
+    font-style: italic;
+}
+
+/* Read-only formatted value display (action / observation.* / etc.). Tracked
+   as I3 in src/lerobot/gui/docs/add_feature_review.md — replaces the bare
+   "read-only in V1" placeholder so the user can actually inspect recorded
+   values. */
+.feature-card .readonly-scalar {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    color: #cdd9e5;
+    padding: 3px 6px;
+    background: #1a1f29;
+    border: 1px solid #2a3140;
+    border-radius: 3px;
+    display: inline-block;
+}
+.feature-card .readonly-vector {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 4px;
+    max-height: 240px;
+    overflow-y: auto;
+    width: 100%;
+    padding: 4px 0;
+}
+.feature-card .readonly-cell {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 2px 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    background: #1a1f29;
+    border: 1px solid #2a3140;
+    border-radius: 3px;
+}
+.feature-card .readonly-cell .readonly-label {
+    color: #6f7c92;
+    flex-shrink: 0;
+}
+.feature-card .readonly-cell .readonly-value {
+    color: #cdd9e5;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.feature-card .readonly-range-hint {
+    display: block;
+    margin-top: 4px;
+    font-size: 10px;
+    font-style: italic;
+    color: #6f7c92;
+}
+.feature-card .card-summary { color: #888; font-size: 11px; margin-bottom: 6px; }
+.feature-card .card-widget { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.feature-card input[type="number"],
+.feature-card input[type="text"],
+.feature-card textarea,
+.feature-card select {
+    background: #0f1c2e;
+    border: 1px solid #0f3460;
+    color: #eee;
+    padding: 4px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+.feature-card input[type="number"] { width: 90px; }
+.feature-card input[type="text"] { flex: 1; min-width: 0; }
+.feature-card textarea { flex: 1; min-width: 0; min-height: 60px; font-family: monospace; }
+.feature-card select { flex: 1; min-width: 0; }
+.feature-card input[type="range"] { flex: 1; min-width: 0; }
+.feature-card .vector-row { display: flex; gap: 4px; flex-wrap: wrap; }
+.feature-card .vector-row input { width: 60px; }
+
+/* The timeline stack: the scrubber row + all feature rows share the same
+   .row-label / .row-track geometry so trim handles, envelope tints, the
+   selection band, and the playhead all line up vertically. */
+.timeline-stack {
+    background: #0f1c2e;
+    border-top: 1px solid #0f3460;
+    flex-shrink: 0;
+    max-height: 340px;
+    position: relative;
+    /* Outer is a non-scrolling flex column. The scrubber row pins to the top
+       (flex-shrink: 0); .feature-rows is the scrollable region underneath. */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Scrubber row hosts the existing #timeline element. Same column widths as
+   feature rows; bottom border separates it from the per-feature stack. */
+.scrubber-row {
+    display: flex;
+    align-items: stretch;
+    height: 28px;
+    border-bottom: 1px solid #0f3460;
+    background: #142036;
+    flex-shrink: 0;
+    position: relative;
+}
+.scrubber-row .row-label {
+    width: 120px;
+    flex-shrink: 0;
+    padding: 4px 8px;
+    border-right: 1px solid #0f3460;
+    background: #16213e;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+}
+.scrubber-row .row-label .row-name { color: #aaa; font-size: 10px; font-weight: 600; }
+.scrubber-row .row-track {
+    flex: 1;
+    position: relative;
+    /* Vertical padding only: gives the scrubber thumb (16×16, centered on the
+       8px timeline) room above/below. NO horizontal padding so the timeline
+       width matches feature rows' .row-track exactly — that's the whole
+       point of the new layout: vertical alignment of trim handles, envelope
+       tints, selection band, and playhead across every row. */
+    padding: 10px 0;
+    overflow: visible;
+    /* Center the 8px timeline vertically inside the 28px row. */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+/* Feature rows (Phase A3 / B1). */
+.feature-rows {
+    /* Inner stack — sibling of .scrubber-row inside .timeline-stack. */
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    position: relative;
+}
+.feature-row {
+    display: flex;
+    align-items: stretch;
+    height: 36px;
+    border-bottom: 1px solid #102540;
+    position: relative;
+}
+.feature-row.collapsed { height: 22px; }
+.feature-row .row-label {
+    width: 120px;
+    flex-shrink: 0;
+    padding: 4px 8px;
+    border-right: 1px solid #0f3460;
+    overflow: hidden;
+    background: #16213e;
+    position: relative;
+}
+.feature-row .row-label .row-name { color: #ddd; font-size: 11px; font-weight: 600; }
+.feature-row .row-label .row-dtype { color: #888; font-size: 10px; }
+/* Read-only state: dimmed label name + a thin border-left stripe so the
+   row stands apart from editable rows even though the explicit
+   "read-only" tag was dropped (the 36px row didn't fit a 3rd line and
+   it got clipped). Inspector card still shows the verbose tag on click. */
+.feature-row.readonly .row-label { border-left: 2px solid #4a5468; }
+.feature-row.readonly .row-label .row-name { color: #9aa4b8; font-style: italic; }
+.feature-row.readonly .row-label .row-dtype { color: #6f7a8e; }
+.feature-row .row-track {
+    flex: 1;
+    position: relative;
+    cursor: crosshair;
+    background: #0a1626;
+}
+.feature-row.readonly .row-track { cursor: default; }
+.feature-row .row-track svg { display: block; width: 100%; height: 100%; }
+.feature-row .row-track .row-trim-dim {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+}
+.feature-row .row-track .row-selection {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: rgba(243, 156, 18, 0.25);
+    border-left: 2px solid #f39c12;
+    border-right: 2px solid #f39c12;
+    pointer-events: none;
+}
+
+.feature-rows-empty {
+    color: #888;
+    font-style: italic;
+    padding: 12px 16px;
+    font-size: 12px;
+}
+
+/* "Show pending edits" toggle on the edits bar */
+.show-pending-toggle {
+    color: #ccc;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+.show-pending-toggle input[type="checkbox"] { accent-color: #f39c12; }
+
+/* Resize handles */
+.cameras-timeline-resize-handle {
+    height: 4px;
+    cursor: row-resize;
+    background: transparent;
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+.cameras-timeline-resize-handle:hover,
+.cameras-timeline-resize-handle.dragging {
+    background: #4fc3f7;
+}
+.inspector-resize-handle {
+    width: 4px;
+    cursor: col-resize;
+    background: transparent;
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+.inspector-resize-handle:hover,
+.inspector-resize-handle.dragging {
+    background: #4fc3f7;
+}
+
+/* Show pending edits — overlay drawn on top of feature row tracks */
+.feature-row .row-track .row-pending-overlay {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: rgba(243, 156, 18, 0.30);
+    border: 1px dashed #f39c12;
+    pointer-events: none;
+}
+
+/* String row labels: HTML overlay so glyphs aren't stretched by the
+   row-track SVG's preserveAspectRatio="none". Positioned in the same
+   percent-based coordinate space as the colored stripe rects. */
+.feature-row .row-track .row-string-label {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 11px;
+    pointer-events: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ── Default-features banner (offer to add reward / success) ───────── */
+/* `:not([hidden])` so the `hidden` HTML attribute (UA `display: none`)
+   wins over our explicit display rule. Without this, `display: flex`
+   would override `hidden` and the banner would stay visible after
+   `hideDefaultsBanner()` runs — bug. */
+.default-features-banner:not([hidden]) {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    background: #2a2520;
+    border: 1px solid #c0922b;
+    border-radius: 4px;
+    margin: 4px 8px 8px 8px;
+    font-size: 12px;
+    color: #f0d090;
+}
+.default-features-banner .banner-icon { font-size: 14px; }
+.default-features-banner .banner-text { flex: 1; }
+.default-features-banner button { white-space: nowrap; }
+.default-features-banner .banner-rename-note {
+    display: block;
+    margin-top: 2px;
+    color: #c8b888;
+    font-size: 11px;
+}
+.default-features-banner .banner-rename-note code {
+    background: #1f1f1f;
+    border: 1px solid #555;
+    border-radius: 3px;
+    padding: 0 4px;
+    color: #ddd;
+    font-size: 10px;
+}
+
+/* ── Add Feature dialog ─────────────────────────────────────────────── */
+/* showModal() places <dialog> at the top of the viewport by default;
+   inset:0 + margin:auto centers it both axes. Tracked as I5 in
+   src/lerobot/gui/docs/add_feature_review.md. */
+.add-feature-dialog {
+    padding: 16px 20px;
+    min-width: 360px;
+    max-width: 480px;
+    border: 1px solid #555;
+    border-radius: 6px;
+    background: #2a2a2a;
+    color: #ddd;
+    position: fixed;
+    inset: 0;
+    margin: auto;
+}
+.add-feature-dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+.add-feature-dialog .dialog-warning {
+    margin: 0 0 12px 0;
+    padding: 8px 10px;
+    font-size: 11px;
+    color: #f0d090;
+    background: #2a2520;
+    border: 1px solid #c0922b;
+    border-radius: 3px;
+    line-height: 1.4;
+}
+.add-feature-dialog h3 { margin: 0 0 12px 0; font-size: 14px; }
+.add-feature-dialog form > label { display: block; margin: 8px 0; font-size: 12px; }
+.add-feature-dialog input[type="text"],
+.add-feature-dialog select {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 4px 6px;
+    margin-top: 2px;
+    background: #1f1f1f;
+    color: #eee;
+    border: 1px solid #555;
+    border-radius: 3px;
+}
+.add-feature-dialog .checkbox-row { display: flex; align-items: center; gap: 6px; }
+.add-feature-dialog .checkbox-row input { width: auto; margin: 0; }
+.add-feature-dialog menu {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    padding: 0;
+    margin: 12px 0 0 0;
+}
+.add-feature-dialog menu button {
+    padding: 4px 12px;
+    border-radius: 3px;
+    border: 1px solid #555;
+    background: #444;
+    color: #eee;
+    cursor: pointer;
+    font-size: 12px;
+}
+.add-feature-dialog menu button#add-feature-submit {
+    background: #4fc3f7;
+    color: #000;
+    border-color: #4fc3f7;
+    font-weight: 600;
+}
+.add-feature-dialog .dialog-error { color: #e57373; font-size: 11px; margin-top: 6px; }
+
+/* ── + Add feature row (mounted inside the feature column) ─────────── */
+.feature-row-addbtn {
+    padding: 6px 8px;
+    text-align: center;
+}
+.feature-row-addbtn .feature-add-btn {
+    background: transparent;
+    border: 1px dashed #777;
+    color: #aaa;
+    padding: 4px 12px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 11px;
+}
+.feature-row-addbtn .feature-add-btn:hover { border-color: #4fc3f7; color: #4fc3f7; }
+
+/* ── Per-row delete button (✕) ──────────────────────────────────────── */
+/* Anchored to the top-right of the row label so it's always reachable
+   regardless of how much room the name/dtype/readonly tag take. The
+   parent .row-label gets `position: relative` (above) so this absolute
+   positioning is scoped to the cell. */
+.feature-row .row-label .row-delete-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: #888;
+    width: 18px;
+    height: 18px;
+    line-height: 16px;
+    padding: 0;
+    border-radius: 3px;
+    font-size: 11px;
+    cursor: pointer;
+    /* Faded when not hovering — visible enough to be discoverable but
+       not visually noisy. Brightens to full opacity on row hover. The
+       previous `opacity: 0` made the button invisible until very
+       deliberate hover, which made the affordance undiscoverable for
+       most users. */
+    opacity: 0.3;
+    transition: opacity 0.1s, color 0.1s, border-color 0.1s, background 0.1s;
+    z-index: 1;
+}
+.feature-row:hover .row-label .row-delete-btn { opacity: 1; }
+.feature-row .row-label .row-delete-btn:hover {
+    color: #e57373;
+    border-color: #e57373;
+    background: #2a1a1a;
+    opacity: 1;
+}
+
+/* ── Success tri-state segment control ──────────────────────────────── */
+.success-segment {
+    display: inline-flex;
+    gap: 0;
+    border: 1px solid #555;
+    border-radius: 4px;
+    overflow: hidden;
+}
+.success-segment button {
+    border: 0;
+    background: transparent;
+    color: #ccc;
+    padding: 4px 12px;
+    font-size: 11px;
+    cursor: pointer;
+}
+.success-segment button + button { border-left: 1px solid #555; }
+.success-segment button:hover { background: #3a3a3a; }
+.success-segment button.active { background: #4a4a4a; font-weight: 600; }
+.success-segment button.failure.active { background: #5a2a2a; color: #f08080; }
+.success-segment button.success.active { background: #2a5a2a; color: #80f080; }
+.success-segment button.disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Bridge highlight — set by bridge_consumers.js when the AI calls
+   highlight_in_viewer(). Strong cyan outline + accent background +
+   persistent "AI ▸" badge so it's clearly visible even in compressed
+   video captures or when the row is near the viewport edge. */
+.bridge-highlight {
+    outline: 3px solid #4fc3f7;
+    outline-offset: -3px;
+    background: rgba(79, 195, 247, 0.25) !important;
+    box-shadow: inset 0 0 0 1px rgba(79, 195, 247, 0.6),
+                0 0 14px rgba(79, 195, 247, 0.45);
+    animation: bridge-highlight-pulse 0.9s ease-out 0s 3;
+    position: relative;
+}
+.bridge-highlight::after {
+    content: "AI ▸";
+    position: absolute;
+    right: 8px; top: 50%; transform: translateY(-50%);
+    font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
+    color: #16213e; background: #4fc3f7;
+    padding: 2px 6px; border-radius: 3px;
+    pointer-events: none;
+}
+@keyframes bridge-highlight-pulse {
+    0%, 100% { background: rgba(79, 195, 247, 0.25) !important; }
+    50%      { background: rgba(79, 195, 247, 0.55) !important; }
+}
+
+/* ── Training panel ──────────────────────────────────────────────────────── */
+.training-state-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.training-state-pending    { background: #4a4a4a; color: #ccc; }
+.training-state-running    { background: #2a4a5a; color: #80ccff; }
+.training-state-completing { background: #5a4a2a; color: #f0c040; }
+.training-state-completed  { background: #2a5a2a; color: #80f080; }
+.training-state-failed     { background: #5a2a2a; color: #f08080; }
+.training-state-aborted    { background: #4a4a4a; color: #aaa; }
+.training-run-row:hover { background: #1a2640; }
+
+/* ── Training panel — sidebar row + detail pane ───────────────────────────── */
+
+/* Constrain the runs list height so it scrolls instead of pushing the rest
+ * of the sidebar off-screen. Sized to ~8 rows; sibling sidebar sections
+ * (Models list, hosts info) stay visible regardless of run count. */
+#training-runs-list {
+    max-height: 320px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* Right-click context menu on a run row. Floating, single-column,
+ * appears at the cursor; dismisses on any outside click. */
+.training-context-menu {
+    position: fixed;
+    display: none;
+    z-index: 9999;
+    min-width: 200px;
+    background: #16213e;
+    border: 1px solid #2a3a5a;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    padding: 4px 0;
+    font-size: 13px;
+    color: #e8e8e8;
+}
+.training-context-item {
+    padding: 8px 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.training-context-item:hover {
+    background: #1a2640;
+}
+.training-context-item-danger {
+    color: #ff9999;
+}
+.training-context-item-danger:hover {
+    background: #2e1a1a;
+}
+.training-context-icon {
+    color: #888;
+    font-size: 14px;
+    width: 16px;
+    text-align: center;
+}
+
+/* Configuration card — args table in the detail view */
+.training-args-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.training-args-table th,
+.training-args-table td {
+    text-align: left;
+    padding: 5px 10px;
+    border-bottom: 1px solid #1a1a2e;
+    vertical-align: top;
+}
+.training-args-table th {
+    color: #888;
+    font-weight: 500;
+    width: 32%;
+}
+.training-args-table td {
+    color: #d0d0d0;
+    word-break: break-all;
+}
+
+.training-empty-hint {
+    padding: 10px 12px;
+    color: #888;
+    font-size: 12px;
+}
+.training-run-row {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #1a1a2e;
+}
+.training-run-row.selected { background: #16213e; }
+.training-run-row-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+.training-run-name {
+    font-weight: 500;
+    color: #e8e8e8;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.training-run-row-sub {
+    color: #888;
+    font-size: 11px;
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Image-prep status banner (between header and stats card) */
+.training-image-banner {
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    margin-bottom: 16px;
+    border: 1px solid transparent;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.training-image-banner.pending {
+    background: #1a1a2e;
+    border-color: #2a2a4a;
+    color: #b0b0c8;
+}
+.training-image-banner.pulling {
+    background: #1a2e1a;
+    border-color: #2a5a2a;
+    color: #b8e8b8;
+}
+.training-image-banner.pulling::before {
+    content: "⤓";
+    font-size: 14px;
+    color: #6aff6a;
+}
+.training-image-banner.ok {
+    background: #14241a;
+    border-color: #2a4a30;
+    color: #88c0a0;
+}
+.training-image-banner.ok::before {
+    content: "✓";
+    color: #6aff8a;
+}
+.training-image-banner.failed {
+    background: #2e1a1a;
+    border-color: #5a2a2a;
+    color: #ff9999;
+}
+.training-image-banner.failed::before {
+    content: "✗";
+    color: #ff6666;
+}
+
+/* Detail pane container — must scroll when the form gets tall (SmolVLA
+ * exposes 38 form fields; ACT 23; Diffusion 33). Parent `.tab-content`
+ * is `overflow: hidden` so the scroll has to happen here. Matches the
+ * existing `.model-detail` pattern. */
+#training-detail {
+    overflow-y: auto;
+    height: 100%;
+}
+
+/* Detail pane */
+.training-detail-pane {
+    padding: 24px;
+    max-width: 1000px;
+    color: #e8e8e8;
+    font-size: 13px;
+}
+.training-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid #1a1a2e;
+}
+.training-detail-title {
+    margin: 0 0 6px;
+    font-size: 18px;
+    font-weight: 600;
+}
+.training-detail-meta {
+    color: #888;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.training-detail-meta .sep { color: #555; }
+.training-detail-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Card */
+.training-card {
+    background: #16213e;
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+}
+.training-card-heading {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+
+/* Stats row inside a card */
+.training-stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+    gap: 16px;
+    margin-bottom: 12px;
+}
+.training-stat-label {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.training-stat-value {
+    font-size: 18px;
+    font-weight: 600;
+    color: #e8e8e8;
+    margin-top: 2px;
+}
+.training-progress-bar {
+    position: relative;
+    height: 18px;
+    background: #0f3460;
+    border-radius: 4px;
+    overflow: hidden;
+}
+.training-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4fc3f7, #80f080);
+    transition: width 0.5s ease;
+}
+.training-progress-label {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+/* Metric charts (hand-rolled inline SVG; no charting dependency) */
+.training-charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+}
+.training-chart {
+    background: var(--bg-primary, #252526);
+    border: 1px solid #1a3a6a;
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+.training-chart-title {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+.training-chart-cur {
+    float: right;
+    color: #e8e8e8;
+}
+.training-chart-canvas {
+    width: 100%;
+    height: 96px;
+    display: block;
+}
+.training-chart-axis {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: #666;
+    margin-top: 2px;
+}
+
+/* Checkpoints list */
+.training-checkpoint-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    font-size: 12px;
+}
+.training-checkpoint-list li {
+    display: grid;
+    grid-template-columns: 80px 1fr 130px;
+    gap: 12px;
+    padding: 4px 0;
+    border-bottom: 1px dashed #1a1a2e;
+    align-items: center;
+}
+.training-checkpoint-list li:last-child { border-bottom: none; }
+
+/* Log */
+.training-log {
+    background: #0a0a1a;
+    color: #ccc;
+    padding: 10px 12px;
+    margin: 0;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    line-height: 1.5;
+    max-height: 280px;
+    overflow: auto;
+    white-space: pre-wrap;
+}
+
+.training-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.training-muted { color: #888; }
+
+.training-error {
+    background: #3a1a1a;
+    color: #f08080;
+    padding: 10px 12px;
+    border-radius: 4px;
+    margin-top: 12px;
+    font-size: 12px;
+}
+
+/* Form */
+.training-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-width: 720px;
+}
+/* Label-left / control-right rows — one field per line, so the form reads
+   as a vertical list (matching the read-only Configuration table) instead
+   of a flat multi-column grid. Label in col 1, control in col 2, help text
+   under the control (col 2, row 2). */
+.training-field {
+    display: grid;
+    grid-template-columns: minmax(120px, 34%) 1fr;
+    align-items: center;
+    column-gap: 12px;
+    row-gap: 4px;
+}
+.training-field-label {
+    grid-column: 1;
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+.training-field > input,
+.training-field > select,
+.training-field > textarea {
+    grid-column: 2;
+    min-width: 0;
+}
+.training-field-hint {
+    grid-column: 2;
+    font-size: 11px;
+    color: #666;
+}
+.training-field input,
+.training-field select {
+    background: #0f3460;
+    border: 1px solid #1a3a6a;
+    color: #e8e8e8;
+    padding: 7px 10px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: inherit;
+}
+.training-field input:focus,
+.training-field select:focus {
+    outline: none;
+    border-color: #4fc3f7;
+}
+.training-field input:disabled,
+.training-field select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.training-field-row {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.training-form-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+/* Collapsible section (shrinkable title) — used for the new-run fieldsets
+   AND the run-detail Configuration card, so both read the same way. */
+.training-section {
+    border: 1px solid #1a3a6a;
+    border-radius: 6px;
+    margin: 0;
+}
+.training-section > summary {
+    padding: 10px 14px;
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.training-section > summary::-webkit-details-marker {
+    display: none;
+}
+.training-section > summary::before {
+    content: "\25B8"; /* ▸ */
+    font-size: 10px;
+    transition: transform 0.15s ease;
+}
+.training-section[open] > summary::before {
+    transform: rotate(90deg);
+}
+.training-section[open] > summary {
+    border-bottom: 1px solid #1a3a6a;
+}
+.training-section > :not(summary) {
+    margin: 12px 14px;
+}
+
+/* Bool field: checkbox sits in the control column (col 2) next to its label. */
+.training-field-bool > input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    justify-self: start;
+    accent-color: #4fc3f7;
+}

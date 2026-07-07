@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LeRobot GUI</title>
+    <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
+    <link rel="stylesheet" href="/static/style.css?v=47">
+</head>
+<body>
+    <div class="tab-bar">
+        <button class="tab active" data-tab="data" onclick="switchTab('data')">Data</button>
+        <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
+        <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
+        <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
+        <span id="hf-auth-indicator" style="margin-left:auto; font-size:11px; color:var(--text-secondary, #666); padding-right:12px; cursor:default;" title="HuggingFace Hub login status"></span>
+        <!-- Transfers indicator: always visible so the user can find their
+             Hub transfers without remembering a hidden trigger. Click toggles
+             the popover below; the popover lists one card per active or
+             recently-completed Hub transfer (empty when idle). -->
+        <button id="transfers-indicator" class="transfers-indicator" type="button"
+                onclick="toggleTransfersPopover()"
+                title="Hub uploads / downloads">
+            <span id="transfers-indicator-label">Transfers</span>
+        </button>
+        <a id="ai-setup-link" class="bug-report-btn" style="text-decoration: none;" href="/ai_setup" title="Issue / list / revoke MCP tokens — connect Claude Code, Codex, Cursor, etc.">AI setup</a>
+        <button id="bug-report-btn" class="bug-report-btn" onclick="openBugReportDialog()" title="Report a bug — screenshot is captured automatically">Report bug</button>
+    </div>
+
+    <!-- Transfers popover: anchored under the tab bar's transfers indicator.
+         Hidden by default; toggled by toggleTransfersPopover(). Body is
+         (re)rendered every time the polled /hub/jobs response comes back. -->
+    <div id="transfers-popover" class="transfers-popover" hidden>
+        <div class="transfers-popover-header">
+            <span>Hub transfers</span>
+            <button class="transfers-clear-btn" type="button"
+                    onclick="openHubJobFolder()"
+                    title="Open the per-job log directory on the GUI host (xdg-open)">Open log folder</button>
+            <button class="transfers-clear-btn" type="button"
+                    onclick="dismissAllFinishedTransfers()"
+                    title="Dismiss all finished transfers">Clear finished</button>
+        </div>
+        <div id="transfers-list" class="transfers-list"></div>
+    </div>
+
+    <!-- Data tab (existing) -->
+    <div class="tab-content active" id="tab-data">
+        <div class="layout">
+            <div class="sidebar">
+                <div class="sidebar-header">
+                    <h1>Datasets</h1>
+                </div>
+                <div class="sidebar-section sources-section">
+                    <div class="section-label">
+                        <span>Sources</span>
+                        <button class="btn-small" onclick="addSource()" title="Add source folder">+</button>
+                    </div>
+                    <div id="sources-container"></div>
+                </div>
+                <div class="sidebar-section opened-section">
+                    <div class="section-label">
+                        <span>Opened</span>
+                    </div>
+                    <div class="tree-container" id="tree-container">
+                        <div style="padding: 8px 12px; color: #666; font-size: 12px;">No datasets opened</div>
+                    </div>
+                </div>
+            </div>
+            <div class="sidebar-resize-handle"></div>
+            <div class="main">
+                <div class="camera-grid" id="camera-grid">
+                    <div class="empty-state">Select an episode to view</div>
+                </div>
+
+                <div class="cameras-timeline-resize-handle" id="cameras-timeline-resize"></div>
+
+                <div class="controls-bar">
+                    <button id="play-btn" onclick="togglePlay()">&#9654; Play</button>
+                    <select class="speed-select" id="speed-select" onchange="changeSpeed(this.value)">
+                        <option value="0.25">0.25x</option>
+                        <option value="0.5">0.5x</option>
+                        <option value="1" selected>1x</option>
+                        <option value="1.5">1.5x</option>
+                        <option value="2">2x</option>
+                    </select>
+                    <div class="trim-controls" id="trim-controls">
+                        <span class="trim-info" id="trim-info"></span>
+                        <button class="btn-reset" onclick="resetTrim()">Reset</button>
+                    </div>
+                    <div class="frame-info">
+                        <span id="frame-info">- / -</span>
+                        <div class="time-info" id="time-info">0:00 / 0:00</div>
+                    </div>
+                    <div class="status" id="status">Ready</div>
+                </div>
+
+                <!-- Stacked timeline: the scrubber row and the per-feature rows share
+                     the same horizontal coordinate system (.row-label + .row-track),
+                     so trim handles, envelope tints, the selection band, and the
+                     playhead all line up across every row. -->
+                <!-- Banner offering to add MUST-have default features (reward, success)
+                     when an opened dataset's schema is missing them. Hidden by default;
+                     shown by FeatureEditing.maybeShowDefaultsBanner() on dataset open. -->
+                <div id="default-features-banner" class="default-features-banner" hidden>
+                    <span class="banner-icon">⚠️</span>
+                    <span class="banner-text">
+                        This dataset is missing default features:
+                        <strong id="banner-missing-list"></strong>.
+                        <span id="banner-rename-note" class="banner-rename-note" hidden></span>
+                    </span>
+                    <button id="banner-add-btn" class="btn-small" type="button">Add missing features</button>
+                    <button id="banner-dismiss-btn" class="btn-small secondary" type="button">Dismiss</button>
+                </div>
+
+                <div class="timeline-stack">
+                    <div class="scrubber-row">
+                        <div class="row-label">
+                            <div class="row-name">time</div>
+                        </div>
+                        <div class="row-track" id="timeline-container">
+                            <div class="timeline-hover" id="timeline-hover">0:00 / Frame 0</div>
+                            <div class="timeline" id="timeline">
+                                <div class="timeline-progress" id="timeline-progress"></div>
+                                <div class="trim-cut-left" id="trim-cut-left"></div>
+                                <div class="trim-cut-right" id="trim-cut-right"></div>
+                                <div class="trim-region" id="trim-region">
+                                    <div class="trim-handle left" id="trim-handle-left"></div>
+                                    <div class="trim-handle right" id="trim-handle-right"></div>
+                                </div>
+                                <div class="timeline-scrubber" id="timeline-scrubber"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="feature-rows" id="feature-rows"></div>
+                </div>
+
+                <div class="edits-bar" id="edits-bar">
+                    <span class="edits-count" id="edits-count">0 pending edits</span>
+                    <label class="show-pending-toggle">
+                        <input type="checkbox" id="show-pending-edits-toggle" onchange="onShowPendingEditsToggle()">
+                        Show pending edits
+                    </label>
+                    <button class="btn-discard" onclick="discardEdits()">Discard</button>
+                    <button class="btn-save" onclick="applyEdits()">Save Changes</button>
+                </div>
+            </div>
+            <div class="inspector-resize-handle" id="inspector-resize"></div>
+            <!-- Inspector ("Props") panel — schema-driven, scoped to current selection.
+                 Always visible when a dataset is open; empty-state shows dataset summary. -->
+            <div class="inspector" id="inspector">
+                <div class="inspector-header">
+                    <h2>Inspector</h2>
+                </div>
+                <div class="inspector-body" id="inspector-body">
+                    <div class="empty-state">Open a dataset to inspect its features</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Model tab -->
+    <div class="tab-content" id="tab-model">
+        <div class="layout">
+            <div class="sidebar" id="model-sidebar">
+                <div class="sidebar-header">
+                    <h1>Models</h1>
+                </div>
+                <div class="sidebar-section sources-section">
+                    <div class="section-label">
+                        <span>Sources</span>
+                        <button class="btn-small" onclick="addModelSource()" title="Add model source folder">+</button>
+                    </div>
+                    <div id="model-sources-container"></div>
+                </div>
+                <div class="sidebar-section" id="training-section">
+                    <div class="section-label">
+                        <span>Training</span>
+                        <div class="section-actions">
+                            <button class="btn-small" onclick="trainingShowStartForm()" id="training-start-btn" title="Loading hosts…" disabled>+ Run</button>
+                            <button class="btn-small" onclick="trainingShowAddHostDialog()" id="training-add-host-btn" title="Add a remote SSH host where training can run">+ Host</button>
+                            <button class="btn-small secondary" onclick="trainingClearCompleted()" id="training-clear-btn" title="Delete all completed/failed/aborted runs from disk">Clear ✓</button>
+                        </div>
+                    </div>
+                    <div id="training-hosts-info" style="font-size: 11px; color: var(--text-secondary, #666); padding: 4px 8px;">Loading hosts…</div>
+                    <div id="training-runs-list"></div>
+                </div>
+            </div>
+            <div class="sidebar-resize-handle"></div>
+            <div class="main" id="model-main">
+                <div class="empty-state" id="model-empty">Select a training run to inspect</div>
+                <div class="model-detail" id="model-detail" style="display:none;"></div>
+                <div id="training-detail" style="display:none; padding: 16px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Run tab -->
+    <div class="tab-content" id="tab-run">
+        <div class="layout">
+            <div class="sidebar" id="run-sidebar">
+                <div class="sidebar-header">
+                    <h1>Run</h1>
+                </div>
+                <div class="run-workflow-selector">
+                    <button class="workflow-btn active" data-workflow="teleop" onclick="selectWorkflow('teleop')">Teleop</button>
+                    <button class="workflow-btn" data-workflow="replay" onclick="selectWorkflow('replay')">Replay</button>
+                    <button class="workflow-btn" data-workflow="policy" onclick="selectWorkflow('policy')">Policy</button>
+                </div>
+                <div class="run-form" id="run-form">
+                    <!-- Populated by run.js -->
+                </div>
+                <div class="run-actions">
+                    <button class="btn-launch" id="run-launch-btn" onclick="launchRun()">Launch</button>
+                    <button class="btn-stop" id="run-stop-btn" onclick="stopRun()" disabled>Stop</button>
+                </div>
+            </div>
+            <div class="sidebar-resize-handle"></div>
+            <div class="main run-main-split" id="run-main">
+                <div class="rerun-viewer" id="rerun-viewer">
+                    <div class="rerun-placeholder" id="rerun-placeholder">Camera view will appear here when a process is running</div>
+                    <!-- TODO: generalize this overlay — currently hardcoded for HVLA S2
+                         subtask text. When we support multiple debug model types, this
+                         should be driven by a model output schema (the model declares
+                         its output fields + types, user picks which to overlay). -->
+                    <div class="debug-model-overlay" id="debug-model-overlay"></div>
+                </div>
+                <div class="run-split-handle" id="run-split-handle"></div>
+                <div class="run-terminal-container" id="run-terminal-container">
+                    <!-- Tab bar for Output / RL Training -->
+                    <div class="run-bottom-tabs" id="run-bottom-tabs">
+                        <button class="run-bottom-tab active" data-tab="output" onclick="_switchBottomTab('output')">Output</button>
+                        <button class="run-bottom-tab" data-tab="rl" onclick="_switchBottomTab('rl')" id="run-bottom-tab-rl" style="display:none">RL Training</button>
+                        <button class="run-bottom-tab" data-tab="latency" onclick="_switchBottomTab('latency')" id="run-bottom-tab-latency" style="display:none">Latency</button>
+                    </div>
+                    <!-- Output tab -->
+                    <div class="run-bottom-panel" id="run-bottom-panel-output">
+                        <div class="run-terminals-split">
+                            <div class="run-terminal-panel" id="run-terminal-panel-main">
+                                <div class="run-terminal-header">
+                                    <span>Output</span>
+                                    <span class="run-status idle" id="run-status-indicator">Idle</span>
+                                    <span class="terminal-actions">
+                                        <button class="btn-terminal" onclick="copyTerminal('run-terminal')" title="Copy">Copy</button>
+                                        <button class="btn-terminal" onclick="clearTerminal('run-terminal')" title="Clear">Clear</button>
+                                    </span>
+                                </div>
+                                <div class="run-terminal" id="run-terminal">
+                                    <div class="terminal-line" style="color: #666;">Select a workflow and press Launch</div>
+                                </div>
+                            </div>
+                            <div class="run-terminal-panel" id="run-terminal-panel-model" style="display:none;">
+                                <div class="run-terminal-header">
+                                    <span>Model Output</span>
+                                    <span class="terminal-actions">
+                                        <button class="btn-terminal" onclick="copyTerminal('run-model-terminal')" title="Copy">Copy</button>
+                                        <button class="btn-terminal" onclick="clearTerminal('run-model-terminal')" title="Clear">Clear</button>
+                                    </span>
+                                </div>
+                                <div class="run-terminal" id="run-model-terminal">
+                                    <div class="terminal-line" style="color: #666;">Model output will appear here</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- RL Training tab -->
+                    <div class="run-bottom-panel" id="run-bottom-panel-rl" style="display:none">
+                        <div class="rlt-dashboard">
+                            <div class="rlt-status-bar" id="rlt-status-bar">
+                                <span class="rlt-stat">Episode: <b id="rlt-stat-episode">0</b></span>
+                                <span class="rlt-stat">Mode: <b id="rlt-stat-mode">IDLE</b></span>
+                                <span class="rlt-stat">Autonomous: <b id="rlt-stat-rate">0%</b></span>
+                                <span class="rlt-stat">Throughput: <b id="rlt-stat-throughput">0/10min</b></span>
+                                <span class="rlt-stat">Buffer: <b id="rlt-stat-buffer">0</b></span>
+                                <span class="rlt-stat">Updates: <b id="rlt-stat-updates">0</b></span>
+                                <span class="rlt-stat" style="margin-left:auto">
+                                    <button id="rlt-btn-diagnostic" type="button" class="rlt-btn">Diagnostic: OFF</button>
+                                </span>
+                                <span class="rlt-stat">History:
+                                    <select id="rlt-stat-history" style="margin-left:4px">
+                                        <option value="200">Last 200</option>
+                                        <option value="500">Last 500</option>
+                                        <option value="1000" selected>Last 1000</option>
+                                        <option value="5000">Last 5000</option>
+                                    </select>
+                                </span>
+                            </div>
+                            <div class="rlt-controls" id="rlt-controls" style="display:none">
+                                <label class="rlt-slider-label">β (BC weight)
+                                    <input type="range" id="rlt-slider-beta" min="0" max="2" step="0.01" value="0.1">
+                                    <span id="rlt-slider-beta-val">0.10</span>
+                                </label>
+                                <label class="rlt-slider-label">σ (exploration)
+                                    <input type="range" id="rlt-slider-sigma" min="0" max="0.1" step="0.001" value="0.02">
+                                    <span id="rlt-slider-sigma-val">0.020</span>
+                                </label>
+                            </div>
+                            <div class="rlt-charts">
+                                <div class="rlt-chart-box">
+                                    <div class="rlt-chart-title">Autonomous Success Rate (rolling 20)</div>
+                                    <canvas id="rlt-chart-success" width="400" height="80"></canvas>
+                                </div>
+                                <div class="rlt-chart-box">
+                                    <div class="rlt-chart-title">Q Values (min/mean/max)</div>
+                                    <canvas id="rlt-chart-qvalues" width="400" height="80"></canvas>
+                                </div>
+                                <div class="rlt-chart-box">
+                                    <div class="rlt-chart-title">Actor Delta (deviation from S1)</div>
+                                    <canvas id="rlt-chart-delta" width="400" height="80"></canvas>
+                                </div>
+                                <div class="rlt-chart-box">
+                                    <div class="rlt-chart-title">Critic Loss</div>
+                                    <canvas id="rlt-chart-critic" width="400" height="80"></canvas>
+                                </div>
+                                <div class="rlt-chart-box">
+                                    <div class="rlt-chart-title">Actor Loss Components (<span style="color:#e06c75">q</span> / <span style="color:#4fc3f7">bc</span>)</div>
+                                    <canvas id="rlt-chart-actor-components" width="400" height="80"></canvas>
+                                </div>
+                                <div class="rlt-chart-box">
+                                    <div class="rlt-chart-title">Update Rate (actor updates/sec)</div>
+                                    <canvas id="rlt-chart-update-rate" width="400" height="80"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Latency tab.
+                         The body is built by run.js: one .latency-track block per
+                         fresh source returned by /api/run/latency-sources. Multi-
+                         thread loops (HVLA) render two stacked tracks (main +
+                         inference); single-thread loops render one. -->
+                    <div class="run-bottom-panel" id="run-bottom-panel-latency" style="display:none">
+                        <div class="latency-dashboard" id="latency-tracks">
+                            <div class="latency-empty" id="latency-no-sources">No latency data yet — waiting for first snapshot…</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Robot tab -->
+    <div class="tab-content" id="tab-robot">
+        <div class="layout">
+            <div class="sidebar" id="robot-sidebar">
+                <div class="sidebar-header">
+                    <h1>Robot Setup</h1>
+                </div>
+                <div class="robot-section">
+                    <div class="section-header">
+                        <span>Robot Profiles</span>
+                        <button class="btn-small" onclick="newRobotProfile()">+ New</button>
+                    </div>
+                    <div class="profile-list" id="robot-profile-list">
+                        <div style="padding: 8px 12px; color: #666; font-size: 12px;">No profiles</div>
+                    </div>
+                </div>
+                <div class="robot-section">
+                    <div class="section-header">
+                        <span>Teleop Profiles</span>
+                        <button class="btn-small" onclick="newTeleopProfile()">+ New</button>
+                    </div>
+                    <div class="profile-list" id="teleop-profile-list">
+                        <div style="padding: 8px 12px; color: #666; font-size: 12px;">No profiles</div>
+                    </div>
+                </div>
+            </div>
+            <div class="sidebar-resize-handle"></div>
+            <div class="main" id="robot-main">
+                <div class="empty-state" id="robot-empty">Select or create a profile</div>
+                <div class="robot-editor" id="robot-editor" style="display:none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Episode context menu -->
+    <div class="context-menu" id="context-menu">
+        <div class="context-menu-item" onclick="contextAction('view')">View Episode</div>
+        <div class="context-menu-item" onclick="contextAction('rerun')">Open in Rerun</div>
+        <div class="context-menu-item" onclick="contextAction('replay')">Replay on Robot</div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-item" onclick="contextAction('cleartrim')">Clear Trim</div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-item" onclick="contextAction('undelete')">Restore Episode</div>
+        <div class="context-menu-item danger" onclick="contextAction('delete')">Delete Episode</div>
+    </div>
+    <!-- Folder context menu -->
+    <div class="context-menu" id="folder-context-menu">
+        <div class="context-menu-item" id="folder-ctx-test-on-robot" onclick="folderContextAction('test-on-robot')" style="display:none">Test on Robot</div>
+        <div class="context-menu-separator" id="folder-ctx-test-separator" style="display:none"></div>
+        <div class="context-menu-item" id="folder-ctx-merge-into" onclick="folderContextAction('merge-into')" style="display:none">Merge Into...</div>
+        <div class="context-menu-separator" id="folder-ctx-merge-separator" style="display:none"></div>
+        <div class="context-menu-item" id="folder-ctx-hub-upload" onclick="folderContextAction('hub-upload')" style="display:none">Upload to Hub</div>
+        <div class="context-menu-item" id="folder-ctx-hub-download" onclick="folderContextAction('hub-download')" style="display:none">Download from Hub</div>
+        <div class="context-menu-separator" id="folder-ctx-hub-separator" style="display:none"></div>
+        <div class="context-menu-item" onclick="folderContextAction('open-in-files')">Open in File Manager</div>
+    </div>
+
+    <!-- Merge Into modal -->
+    <div id="merge-modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+        <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:340px; max-width:480px;">
+            <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">Merge Into</h3>
+            <p style="margin:0 0 12px 0; font-size:12px; color:var(--text-secondary, #999);">
+                Merge all episodes from <strong id="merge-source-name"></strong> into:
+            </p>
+            <select id="merge-target-select" onchange="updateMergePreview()" style="width:100%; padding:6px 8px; margin-bottom:8px; background:var(--bg-primary, #252526); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px;"></select>
+            <div id="merge-preview" style="font-size:11px; color:var(--text-secondary, #999); margin-bottom:8px; padding:8px; background:var(--bg-primary, #252526); border-radius:4px; min-height:16px;"></div>
+            <div id="merge-diff-panel" style="display:none; font-size:11px; margin-bottom:8px; max-height:220px; overflow-y:auto; border:1px solid #555; border-radius:4px; padding:8px; background:#1a1a2e;"></div>
+            <div id="merge-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button onclick="closeMergeModal()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
+                <button id="merge-execute-btn" onclick="executeMerge()" style="padding:5px 14px; background:#c24038; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Merge (modifies target)</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hub Upload/Download modal -->
+    <div id="hub-modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+        <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:400px; max-width:520px;">
+            <h3 id="hub-modal-title" style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);"></h3>
+            <div id="hub-repo-input-row" style="margin-bottom:12px;">
+                <label for="hub-repo-input" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Repository ID</label>
+                <input id="hub-repo-input" type="text" oninput="fetchHubRepoInfo()" placeholder="username/dataset-name" spellcheck="false" autocomplete="off" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--accent, #0e639c); border-radius:4px; font-size:12px; box-sizing:border-box; outline:none; box-shadow:0 0 0 1px rgba(14,99,156,0.2);" onfocus="this.style.boxShadow='0 0 0 2px rgba(14,99,156,0.5)'" onblur="this.style.boxShadow='0 0 0 1px rgba(14,99,156,0.2)'">
+            </div>
+            <div id="hub-repo-info" style="font-size:11px; color:var(--text-secondary, #999); padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px; min-height:40px;"></div>
+            <div id="hub-local-info" style="font-size:11px; color:var(--text-secondary, #999); padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px;"></div>
+            <div id="hub-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button onclick="closeHubModal()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
+                <button id="hub-execute-btn" onclick="executeHubAction()" style="padding:5px 14px; background:var(--accent, #0e639c); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;"></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Add SSH host modal -->
+    <div id="add-host-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+        <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:460px; max-width:580px;">
+            <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">Add training host</h3>
+            <div style="margin-bottom:10px;">
+                <label for="add-host-type" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Type</label>
+                <select id="add-host-type" onchange="addHostTypeChanged()" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                    <option value="ssh">Persistent SSH host (you manage the VM)</option>
+                    <option value="ephemeral">Ephemeral cloud (Nebius — spawned per run)</option>
+                </select>
+            </div>
+            <p id="add-host-help-ssh" style="margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
+                Use a <code style="color:var(--text-primary, #ccc);">~/.ssh/config</code> alias (e.g. <code style="color:var(--text-primary, #ccc);">lab-gpu1</code>) or <code style="color:var(--text-primary, #ccc);">user@host</code>. Auth uses your local SSH setup — the GUI server never reads your private keys.
+            </p>
+            <p id="add-host-help-ephemeral" style="display:none; margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
+                A Nebius VM is spawned when a run starts and destroyed when it ends, using the Nebius connection configured on this server. <strong>You pay the vendor directly</strong> — <a href="https://docs.nebius.com/compute/resources/pricing" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">know the rates ↗</a>.
+                <span id="add-host-nebius-conn-status" style="display:block; margin-top:6px;"></span>
+            </p>
+            <div style="margin-bottom:10px;">
+                <label for="add-host-name" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Name <span style="color:var(--text-secondary,#666);">(used as the host id; a–z, 0–9, _ -)</span></label>
+                <input id="add-host-name" type="text" placeholder="lab-h100" pattern="[a-zA-Z0-9_-]+" maxlength="64" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+            </div>
+            <div id="add-host-ssh-fields" style="margin-bottom:10px;">
+                <label for="add-host-host" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Host</label>
+                <input id="add-host-host" type="text" placeholder="user@lab-gpu1.example.com" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+            </div>
+            <div id="add-host-ephemeral-fields" style="display:none; margin-bottom:10px; grid-template-columns:1fr 1fr; gap:8px;">
+                <div>
+                    <label for="add-host-gpu" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">GPU</label>
+                    <select id="add-host-gpu" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                        <option value="L40S">L40S</option>
+                        <option value="H100">H100</option>
+                        <option value="H200">H200</option>
+                        <option value="L4">L4</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="add-host-disk" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Boot disk (GiB)</label>
+                    <input id="add-host-disk" type="number" value="100" min="1" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                </div>
+                <div>
+                    <label for="add-host-ttl" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Max lifetime (h) <span style="color:var(--text-secondary,#666);">(runaway cap)</span></label>
+                    <input id="add-host-ttl" type="number" value="24" min="1" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                </div>
+                <div style="display:flex; align-items:center; gap:6px; padding-top:18px;">
+                    <input id="add-host-preemptible" type="checkbox" checked>
+                    <label for="add-host-preemptible" style="font-size:11px; color:var(--text-secondary, #999);">Preemptible (spot)</label>
+                </div>
+            </div>
+            <div id="add-host-probe-results" style="margin-bottom:12px; min-height:0;"></div>
+            <div id="add-host-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button id="add-host-cancel" onclick="closeAddHostDialog()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
+                <button id="add-host-test-btn" onclick="addHostTest()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Test</button>
+                <button id="add-host-save-btn" onclick="addHostSubmit()" disabled style="padding:5px 14px; background:var(--accent, #0e639c); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Nebius connection modal (server-held service-account credential) -->
+    <div id="nebius-conn-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+        <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:480px; max-width:600px;">
+            <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">Nebius connection</h3>
+            <p style="margin:0 0 10px 0; font-size:11px; color:var(--text-secondary, #999);">
+                One service-account key, stored on this GUI server and used to spawn and tear down the cloud GPUs. <strong>Note: it's saved on the server and usable by anyone who can reach the GUI</strong> (there's no per-user login), and it bills your Nebius account — so set it up only on a trusted network.
+            </p>
+            <details style="margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
+                <summary style="cursor:pointer; color:var(--accent,#0e639c);">How do I get a key?</summary>
+                <div style="margin-top:6px; line-height:1.5;">
+                    A Nebius <strong>tenant admin</strong> creates a service account and an authorized key — via the
+                    <a href="https://console.nebius.com" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">Nebius console ↗</a>
+                    (IAM → Service accounts → <em>Upload authorized key</em>), or the CLI:
+                    <pre style="margin:6px 0; padding:8px; background:var(--bg-primary,#252526); border-radius:4px; color:var(--text-primary,#ccc); font-size:11px; white-space:pre-wrap; overflow-x:auto;">nebius iam service-account create --name lerobot-training
+nebius iam auth-public-key generate \
+  --service-account-id &lt;SA_ID&gt; --output sa-key.json</pre>
+                    Paste the contents of <code style="color:var(--text-primary,#ccc);">sa-key.json</code> below.
+                    Docs: <a href="https://docs.nebius.com/iam/service-accounts/authorized-keys" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">authorized keys ↗</a> ·
+                    <a href="https://docs.nebius.com/cli/reference/iam/" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">CLI ↗</a>.
+                    The <strong>Project</strong> &amp; <strong>Subnet</strong> IDs are in the console (they start with <code style="color:var(--text-primary,#ccc);">project-</code> / <code style="color:var(--text-primary,#ccc);">vpcsubnet-</code>).
+                </div>
+            </details>
+            <div id="nebius-conn-current" style="font-size:11px; padding:8px; background:var(--bg-primary, #252526); border-radius:4px; margin-bottom:12px; min-height:18px; color:var(--text-secondary,#999);"></div>
+            <div style="margin-bottom:10px;">
+                <label for="nebius-conn-mode" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">How did you create the key?</label>
+                <select id="nebius-conn-mode" onchange="trainingNebiusModeChanged()" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box; margin-bottom:8px;">
+                    <option value="json">A key file from the CLI (auth-public-key generate)</option>
+                    <option value="fields">A private key + IDs (uploaded in the console)</option>
+                </select>
+                <div id="nebius-conn-json-fields">
+                    <label for="nebius-conn-key" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Service-account key JSON <span style="color:var(--text-secondary,#666);">(contents of sa-key.json)</span></label>
+                    <textarea id="nebius-conn-key" rows="7" spellcheck="false" placeholder='{ "subject-credentials": { "alg": "RS256", "private-key": "-----BEGIN PRIVATE KEY----- ...", "kid": "publickey-...", "iss": "serviceaccount-...", "sub": "serviceaccount-..." } }' style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:11px; box-sizing:border-box; resize:vertical; font-family:monospace;"></textarea>
+                </div>
+                <div id="nebius-conn-fields-fields" style="display:none;">
+                    <label for="nebius-conn-privkey" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Private key (PEM) <span style="color:var(--text-secondary,#666);">(the local key whose public half you uploaded)</span></label>
+                    <textarea id="nebius-conn-privkey" rows="6" spellcheck="false" placeholder="-----BEGIN PRIVATE KEY-----&#10;…&#10;-----END PRIVATE KEY-----" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:11px; box-sizing:border-box; resize:vertical; font-family:monospace;"></textarea>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
+                        <div>
+                            <label for="nebius-conn-kid" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Authorized key ID</label>
+                            <input id="nebius-conn-kid" type="text" spellcheck="false" placeholder="publickey-e00..." style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                        </div>
+                        <div>
+                            <label for="nebius-conn-said" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Service account ID</label>
+                            <input id="nebius-conn-said" type="text" spellcheck="false" placeholder="serviceaccount-e00..." style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px;">
+                <div>
+                    <label for="nebius-conn-project" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Project ID</label>
+                    <input id="nebius-conn-project" type="text" spellcheck="false" placeholder="project-e00..." style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                </div>
+                <div>
+                    <label for="nebius-conn-subnet" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Subnet ID</label>
+                    <div style="display:flex; gap:6px;">
+                        <input id="nebius-conn-subnet" type="text" spellcheck="false" placeholder="vpcsubnet-e00..." style="flex:1; min-width:0; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+                        <button type="button" id="nebius-conn-find-subnet" onclick="trainingFindSubnets()" title="List the subnets in this project" style="padding:5px 10px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px; white-space:nowrap;">Find</button>
+                    </div>
+                    <select id="nebius-conn-subnet-found" onchange="trainingPickSubnet()" style="display:none; width:100%; margin-top:6px; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;"></select>
+                    <span id="nebius-conn-subnet-hint" style="display:block; margin-top:4px; font-size:10px; color:var(--text-secondary,#777);"></span>
+                </div>
+            </div>
+            <div id="nebius-conn-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button onclick="trainingCloseNebiusConnection()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
+                <button id="nebius-conn-save-btn" onclick="trainingSaveNebiusConnection()" style="padding:5px 14px; background:var(--accent, #0e639c); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Connect</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bug report modal -->
+    <div id="bug-report-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+        <div style="background:var(--bg-secondary, #1e1e1e); border:1px solid var(--border, #333); border-radius:8px; padding:20px; min-width:420px; max-width:560px;">
+            <h3 style="margin:0 0 12px 0; font-size:14px; color:var(--text-primary, #ccc);">Report a bug</h3>
+            <p style="margin:0 0 12px 0; font-size:11px; color:var(--text-secondary, #999);">
+                Stored on the GUI server under <code style="color:var(--text-primary, #ccc);">~/.cache/lerobot/bug_reports/</code>. Not sent anywhere else.
+            </p>
+            <div style="margin-bottom:10px;">
+                <label for="bug-report-title" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">Title</label>
+                <input id="bug-report-title" type="text" placeholder="Short summary of the issue" style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box;">
+            </div>
+            <div style="margin-bottom:10px;">
+                <label for="bug-report-description" style="font-size:11px; color:var(--text-secondary, #999); display:block; margin-bottom:4px;">What happened? (optional)</label>
+                <textarea id="bug-report-description" rows="5" placeholder="Steps to reproduce, what you expected, what you saw instead." style="width:100%; padding:6px 8px; background:var(--bg-input, #2d2d30); color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; font-size:12px; box-sizing:border-box; resize:vertical; font-family:inherit;"></textarea>
+            </div>
+            <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-secondary, #999); margin-bottom:12px; user-select:none;">
+                <input type="checkbox" id="bug-report-include-screenshot" checked>
+                Attach screenshot of the current view
+            </label>
+            <div id="bug-report-status" style="font-size:11px; color:#e5c07b; margin-bottom:12px; min-height:16px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button id="bug-report-cancel" onclick="closeBugReportDialog()" style="padding:5px 14px; background:transparent; color:var(--text-primary, #ccc); border:1px solid var(--border, #333); border-radius:4px; cursor:pointer; font-size:12px;">Cancel</button>
+                <button id="bug-report-submit" onclick="submitBugReport()" style="padding:5px 14px; background:var(--accent, #0e639c); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Submit</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- "Add feature" dialog (generic schema-add for non-default features). -->
+    <dialog id="add-feature-dialog" class="add-feature-dialog">
+        <form method="dialog" id="add-feature-form">
+            <h3>Add feature</h3>
+            <p class="dialog-warning">
+                This adds a column to <strong>every frame of every episode</strong> in the dataset and
+                rewrites the parquet shards in place. There is no undo via Save/Discard
+                — to remove the column afterwards, hover the row in the timeline (per-frame features)
+                or its card in the Inspector (per-episode features) and click the ✕ that appears.
+            </p>
+            <label>Name <input type="text" name="name" required pattern="[a-zA-Z_][a-zA-Z0-9_.]*" placeholder="e.g. quality_score"></label>
+            <label>Dtype
+                <select name="dtype">
+                    <option value="float32">float32</option>
+                    <option value="int64">int64</option>
+                    <option value="int8">int8</option>
+                    <option value="bool">bool</option>
+                    <option value="string">string</option>
+                </select>
+            </label>
+            <label>Shape <input type="text" name="shape" value="[1]"></label>
+            <label class="checkbox-row"><input type="checkbox" name="per_episode"> Per-episode (one value per episode)</label>
+            <label>Initial fill value <input type="text" name="fill_value" value="0"></label>
+            <div class="dialog-error" id="add-feature-error" hidden></div>
+            <menu>
+                <button value="cancel" type="button" id="add-feature-cancel">Cancel</button>
+                <button id="add-feature-submit" value="default">Add</button>
+            </menu>
+        </form>
+    </dialog>
+
+    <script src="/static/app.js?v=36"></script>
+    <script src="/static/feature_editing.js?v=24"></script>
+    <script src="/static/add_feature_dialog.js?v=2"></script>
+    <script src="/static/charts.js?v=2"></script>
+    <script src="/static/robot.js?v=18"></script>
+    <script src="/static/run.js?v=45"></script>
+    <script src="/static/model.js?v=5"></script>
+    <script src="/static/training.js?v=23"></script>
+    <script src="/static/add_host_dialog.js?v=4"></script>
+    <script src="/static/bug_report.js?v=1"></script>
+    <script src="/static/bridge.js?v=1"></script>
+    <script src="/static/bridge_consumers.js?v=1"></script>
+</body>
+</html>

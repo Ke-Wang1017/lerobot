@@ -1,0 +1,107 @@
+# Publishes our fork's training image to GitHub Container Registry (GHCR)
+# so the deploy script can `docker pull` instead of building locally.
+#
+# Different from .github/workflows/docker_publish.yml (which is upstream's
+# Docker Hub publish gated to huggingface/lerobot only). This workflow:
+#   - Runs ONLY on TheWisp/lerobot (our fork)
+#   - Builds docker/Dockerfile.training (our trimmed training image)
+#   - Pushes to ghcr.io/<owner>/lerobot-training under the fork's owner
+#   - Uses the auto-provisioned GITHUB_TOKEN — no secret management
+#
+# Why GHCR and not Docker Hub:
+#   - Free for public images
+#   - No anonymous pull rate limits (Docker Hub limits hit on shared cloud IPs)
+#   - Auth is GITHUB_TOKEN — no Docker Hub credentials to manage
+#   - Same source-of-truth as the code
+#
+# Tags published:
+#   - ghcr.io/<owner>/lerobot-training:latest     ← always tracks default branch
+#   - ghcr.io/<owner>/lerobot-training:main-<sha> ← per main commit, immutable
+#   - ghcr.io/<owner>/lerobot-training:<release>  ← on release tag
+#
+# First-time setup (one click in GitHub UI after the first run):
+#   Settings → Packages → lerobot-training → Change visibility → Public
+#   (otherwise pulls require auth)
+
+name: Publish fork training image
+
+on:
+  push:
+    # main: publishes :latest + :main-<sha> as the canonical artifact.
+    # feat/**: produces a per-branch test image for verifying the build
+    # before a PR lands, tagged :<branch-slug>-<sha>. The :latest tag is
+    # gated to the default branch in the tag matrix below, so feature
+    # branches never overwrite production.
+    branches: [main, "feat/**"]
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/lerobot/**"
+      - "docker/Dockerfile.training"
+      - ".github/workflows/docker_publish_fork_training.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/lerobot-training
+
+jobs:
+  build-and-push:
+    # Only run on our fork; if anyone else forks our fork, they get their
+    # own image under their own GHCR namespace via the same workflow.
+    if: github.repository_owner == 'TheWisp'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3 # zizmor: ignore[unpinned-uses]
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3 # zizmor: ignore[unpinned-uses]
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Lowercases the owner since GHCR requires lowercase; computes tags
+      # automatically from the trigger (branch / sha / semver release).
+      #
+      # Tag matrix:
+      #   main push       → :main-<sha>  +  :latest
+      #   feat/** push    → :<branch-slugified>-<sha>   (test artifact only)
+      #   release tag     → :<version>  +  :<major>.<minor>
+      - name: Compute tags + labels
+        id: meta
+        uses: docker/metadata-action@v5 # zizmor: ignore[unpinned-uses]
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # `type=ref,event=branch,suffix=-{{sha}}` yields `<branch-slug>-<sha>`
+          # for any branch push — `main-<sha>` on main, `feat-x-<sha>` on
+          # feat/x. Slug-safe (slashes → dashes) by default.
+          tags: |
+            type=ref,event=branch,suffix=-{{sha}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build + push
+        uses: docker/build-push-action@v6 # zizmor: ignore[unpinned-uses]
+        with:
+          context: .
+          file: docker/Dockerfile.training
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions cache speeds up the dep-install layer dramatically
+          # on subsequent runs (target is ~3 min after first warm build).
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
