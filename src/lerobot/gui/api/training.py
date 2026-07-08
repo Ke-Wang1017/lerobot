@@ -825,8 +825,6 @@ _POLICY_LABELS = {
     "diffusion": "Diffusion Policy",
     "smolvla": "SmolVLA",
     "sac": "SAC (Soft Actor-Critic)",
-    "tdmpc": "TD-MPC",
-    "vqbet": "VQ-BeT",
     "pi0": "Pi-0",
     "pi05": "Pi-0.5",
     "pi0_fast": "Pi-0 FAST",

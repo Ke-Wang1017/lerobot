@@ -19,7 +19,6 @@ from torch.optim.lr_scheduler import LambdaLR
 from lerobot.optim.schedulers import (
     CosineDecayWithWarmupSchedulerConfig,
     DiffuserSchedulerConfig,
-    VQBeTSchedulerConfig,
     load_scheduler_state,
     save_scheduler_state,
 )
@@ -38,28 +37,6 @@ def test_diffuser_scheduler(optimizer):
     expected_state_dict = {
         "_get_lr_called_within_step": False,
         "_last_lr": [0.0002],
-        "_step_count": 2,
-        "base_lrs": [0.001],
-        "last_epoch": 1,
-        "lr_lambdas": [None],
-    }
-
-    if Version(torch.__version__) >= Version("2.8"):
-        expected_state_dict["_is_initial"] = False
-
-    assert scheduler.state_dict() == expected_state_dict
-
-
-def test_vqbet_scheduler(optimizer):
-    config = VQBeTSchedulerConfig(num_warmup_steps=10, num_vqvae_training_steps=20, num_cycles=0.5)
-    scheduler = config.build(optimizer, num_training_steps=100)
-    assert isinstance(scheduler, LambdaLR)
-
-    optimizer.step()
-    scheduler.step()
-    expected_state_dict = {
-        "_get_lr_called_within_step": False,
-        "_last_lr": [0.001],
         "_step_count": 2,
         "base_lrs": [0.001],
         "last_epoch": 1,

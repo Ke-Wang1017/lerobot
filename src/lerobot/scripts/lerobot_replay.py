@@ -58,8 +58,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from pprint import pformat
 
-from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
-from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
 from lerobot.configs import parser
 from lerobot.datasets import LeRobotDataset
 from lerobot.processor import (
@@ -68,23 +66,7 @@ from lerobot.processor import (
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
-    bi_openarm_follower,
-    bi_rebot_b601_follower,
-    bi_so107_follower,
-    bi_so107_follower_predictive,
-    bi_so_follower,
-    earthrover_mini_plus,
-    hope_jr,
-    koch_follower,
     make_robot_from_config,
-    omx_follower,
-    openarm_follower,
-    reachy2,
-    rebot_b601_follower,
-    so107_follower_predictive,
-    so_follower,
-    so_follower_predictive,
-    unitree_g1,
 )
 from lerobot.utils.constants import ACTION
 from lerobot.utils.import_utils import register_third_party_plugins

@@ -83,12 +83,10 @@ import torch
 from torch import nn
 from torch.multiprocessing import Queue
 
-from lerobot.cameras import opencv  # noqa: F401
 from lerobot.configs import parser
 from lerobot.policies import make_policy, make_pre_post_processors
 from lerobot.processor import TransitionKey
-from lerobot.robots import so_follower  # noqa: F401
-from lerobot.teleoperators import gamepad, so_leader  # noqa: F401
+from lerobot.teleoperators import gamepad  # noqa: F401
 from lerobot.teleoperators.utils import TeleopEvents
 from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.process import ProcessSignalHandler

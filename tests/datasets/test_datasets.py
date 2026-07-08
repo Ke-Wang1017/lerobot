@@ -961,7 +961,7 @@ ENV_DATASET_POLICY_TRIPLETS = [
 ] + [
     ("pusht", dataset, policy)
     for dataset in ["lerobot/pusht", "lerobot/pusht_image"]
-    for policy in ["diffusion", "vqbet"]
+    for policy in ["diffusion"]
 ]
 
 

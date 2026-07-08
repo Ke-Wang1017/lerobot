@@ -43,8 +43,6 @@ from lerobot.policies.factory import (
     make_pre_post_processors,
 )
 from lerobot.policies.pretrained import PreTrainedPolicy
-from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
-from lerobot.policies.vqbet.modeling_vqbet import VQBeTHead
 from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE
 from lerobot.utils.feature_utils import dataset_to_policy_features
 from lerobot.utils.import_utils import is_package_available
@@ -58,7 +56,7 @@ _POLICY_REQUIRED_PACKAGES: dict[str, tuple[str, ...]] = {
     "diffusion": ("diffusers",),
 }
 
-_ALL_POLICIES = ["act", "diffusion", "tdmpc", "vqbet"]
+_ALL_POLICIES = ["act", "diffusion"]
 AVAILABLE_POLICIES = [
     p for p in _ALL_POLICIES if all(is_package_available(pkg) for pkg in _POLICY_REQUIRED_PACKAGES.get(p, ()))
 ]
@@ -67,7 +65,6 @@ AVAILABLE_POLICIES = [
 @pytest.fixture
 def dummy_dataset_metadata(lerobot_dataset_metadata_factory, info_factory, tmp_path):
     # Create only one camera input which is squared to fit all current policy constraints
-    # e.g. vqbet and tdmpc works with one camera only, and tdmpc requires it to be squared
     camera_features = {
         f"{OBS_IMAGES}.laptop": {
             "shape": (84, 84, 3),
@@ -113,7 +110,6 @@ def test_get_policy_and_config_classes(policy_name: str):
     "ds_repo_id,env_name,env_kwargs,policy_name,policy_kwargs",
     [
         ("lerobot/pusht", "pusht", {}, "diffusion", {}),
-        ("lerobot/pusht", "pusht", {}, "vqbet", {}),
         ("lerobot/pusht", "pusht", {}, "act", {}),
         ("lerobot/aloha_sim_insertion_human", "aloha", {"task": "AlohaInsertion-v0"}, "act", {}),
         (
@@ -160,8 +156,6 @@ def test_policy(ds_repo_id, env_name, env_kwargs, policy_name, policy_kwargs):
     Note: We test various combinations of policy and dataset. The combinations are by no means exhaustive,
           and for now we add tests as we see fit.
     """
-    if policy_name == "vqbet" and DEVICE == "mps":
-        pytest.skip("VQBet does not support MPS backend")
     if policy_name == "act" and "aloha" in ds_repo_id and DEVICE == "mps":
         pytest.skip("ACT with aloha has batch mutation issues on MPS")
 
@@ -506,43 +500,3 @@ def test_act_temporal_ensembler():
         torch.testing.assert_close(online_avg, offline_avg, rtol=1e-4, atol=1e-4)
 
 
-def test_vqbet_discretize_keeps_buffers_on_device():
-    """Regression test: VQBeTHead.discretize() must not move registered buffers off the model device.
-
-    Previously, `self.vqvae_model.discretized = torch.tensor(True)` replaced the
-    registered buffer with a new CPU tensor, causing DDP to crash with:
-        RuntimeError: No backend type associated with device type cpu
-    The fix uses `.fill_(True)` to update in-place, preserving device placement.
-    """
-    config = VQBeTConfig()
-    config.input_features = {
-        OBS_IMAGES: PolicyFeature(type=FeatureType.VISUAL, shape=(3, 96, 96)),
-        OBS_STATE: PolicyFeature(type=FeatureType.STATE, shape=(6,)),
-    }
-    config.output_features = {
-        ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(6,)),
-    }
-    # Tiny sizes for fast CPU/GPU execution.
-    config.n_vqvae_training_steps = 3
-    config.vqvae_n_embed = 8
-    config.vqvae_embedding_dim = 32
-    config.vqvae_enc_hidden_dim = 32
-    config.action_chunk_size = 2
-    config.crop_shape = (84, 84)
-
-    head = VQBeTHead(config).to(DEVICE)
-    vqvae = head.vqvae_model
-
-    dummy_actions = torch.randn(4, config.action_chunk_size, config.action_feature.shape[0], device=DEVICE)
-    n_steps = config.n_vqvae_training_steps
-    for _ in range(n_steps):
-        head.discretize(n_steps, dummy_actions)
-
-    assert vqvae.discretized.device.type == torch.device(DEVICE).type, (
-        "vqvae_model.discretized was moved off the model device after discretize(). "
-        "Use .fill_(True) instead of = torch.tensor(True) to keep the buffer on device."
-    )
-    assert vqvae.vq_layer.freeze_codebook.device.type == torch.device(DEVICE).type, (
-        "vq_layer.freeze_codebook was moved off the model device after discretize(). "
-        "Use .fill_(True) instead of = torch.tensor(True) to keep the buffer on device."
-    )

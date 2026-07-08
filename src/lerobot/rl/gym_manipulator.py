@@ -23,7 +23,6 @@ import gymnasium as gym
 import numpy as np
 import torch
 
-from lerobot.cameras import opencv  # noqa: F401
 from lerobot.configs import parser
 from lerobot.datasets import LeRobotDataset
 from lerobot.envs import HILSerlRobotEnvConfig
@@ -52,13 +51,12 @@ from lerobot.processor import (
     create_transition,
     identity_transition,
 )
-from lerobot.robots import (  # noqa: F401
+from lerobot.robots import (
     RobotConfig,
     make_robot_from_config,
-    so_follower,
 )
 from lerobot.robots.robot import Robot
-from lerobot.robots.so_follower.robot_kinematic_processor import (
+from lerobot.robots.robot_kinematic_processor import (
     EEBoundsAndSafety,
     EEReferenceAndDelta,
     ForwardKinematicsJointsToEEObservation,
@@ -69,7 +67,6 @@ from lerobot.teleoperators import (
     gamepad,  # noqa: F401
     keyboard,  # noqa: F401
     make_teleoperator_from_config,
-    so_leader,  # noqa: F401
 )
 from lerobot.teleoperators.teleoperator import Teleoperator
 from lerobot.teleoperators.utils import TeleopEvents

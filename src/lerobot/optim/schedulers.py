@@ -60,29 +60,6 @@ class DiffuserSchedulerConfig(LRSchedulerConfig):
         return get_scheduler(**kwargs)
 
 
-@LRSchedulerConfig.register_subclass("vqbet")
-@dataclass
-class VQBeTSchedulerConfig(LRSchedulerConfig):
-    num_warmup_steps: int
-    num_vqvae_training_steps: int
-    num_cycles: float = 0.5
-
-    def build(self, optimizer: Optimizer, num_training_steps: int) -> LambdaLR:
-        def lr_lambda(current_step):
-            if current_step < self.num_vqvae_training_steps:
-                return float(1)
-            else:
-                adjusted_step = current_step - self.num_vqvae_training_steps
-                if adjusted_step < self.num_warmup_steps:
-                    return float(adjusted_step) / float(max(1, self.num_warmup_steps))
-                progress = float(adjusted_step - self.num_warmup_steps) / float(
-                    max(1, num_training_steps - self.num_warmup_steps)
-                )
-                return max(0.0, 0.5 * (1.0 + math.cos(math.pi * float(self.num_cycles) * 2.0 * progress)))
-
-        return LambdaLR(optimizer, lr_lambda, -1)
-
-
 @LRSchedulerConfig.register_subclass("constant_with_warmup")
 @dataclass
 class ConstantWithWarmupSchedulerConfig(LRSchedulerConfig):

@@ -136,7 +136,7 @@ function _policyBadge(type) {
     if (!type) return '';
     const colors = {
         act: '#4fc3f7', diffusion: '#81c784', pi0: '#ffb74d', pi0_fast: '#ffb74d',
-        pi05: '#ff8a65', vqbet: '#ce93d8', smolvla: '#a5d6a7',
+        pi05: '#ff8a65', smolvla: '#a5d6a7',
     };
     const color = colors[type] || '#888';
     return `<span class="model-policy-badge" style="color:${color}">${_esc(type)}</span>`;

@@ -1165,7 +1165,15 @@ def _do_recover(profile: dict) -> dict:
     Recovery opens each bus directly, bypassing the strict handshake that the
     normal ``connect()`` path uses, so it must own the serial port.
     """
-    from lerobot.motors.recovery import recover_robot
+    try:
+        from lerobot.motors.recovery import recover_robot
+    except ImportError:
+        # Motor recovery is a concrete-driver feature; unavailable without a
+        # robot driver plugin that ships it.
+        return {
+            "status": "error",
+            "message": "motor recovery unavailable (no concrete motor driver installed)",
+        }
 
     try:
         robot = _make_robot_from_profile(profile)

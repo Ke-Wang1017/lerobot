@@ -23,92 +23,13 @@ from .robot import Robot
 
 
 def make_robot_from_config(config: RobotConfig) -> Robot:
-    # TODO(Steven): Consider just using the make_device_from_device_class for all types
-    if config.type == "koch_follower":
-        from .koch_follower import KochFollower
-
-        return KochFollower(config)
-    elif config.type == "omx_follower":
-        from .omx_follower import OmxFollower
-
-        return OmxFollower(config)
-    elif config.type == "so100_follower":
-        from .so_follower import SO100Follower
-
-        return SO100Follower(config)
-    elif config.type == "so101_follower":
-        from .so_follower import SO101Follower
-
-        return SO101Follower(config)
-    elif config.type == "so107_follower":
-        from .so_follower import SO107Follower
-
-        return SO107Follower(config)
-    elif config.type == "so107_follower_predictive":
-        from .so107_follower_predictive import SO107FollowerPredictive
-
-        return SO107FollowerPredictive(config)
-    elif config.type == "so_follower_predictive":
-        from .so_follower_predictive import SOFollowerPredictive
-
-        return SOFollowerPredictive(config)
-    elif config.type == "lekiwi":
-        from .lekiwi import LeKiwi
-
-        return LeKiwi(config)
-    elif config.type == "hope_jr_hand":
-        from .hope_jr import HopeJrHand
-
-        return HopeJrHand(config)
-    elif config.type == "hope_jr_arm":
-        from .hope_jr import HopeJrArm
-
-        return HopeJrArm(config)
-    elif config.type == "bi_so_follower":
-        from .bi_so_follower import BiSOFollower
-
-        return BiSOFollower(config)
-    elif config.type == "bi_so107_follower":
-        from .bi_so107_follower import BiSO107Follower
-
-        return BiSO107Follower(config)
-    elif config.type == "bi_so107_follower_predictive":
-        from .bi_so107_follower_predictive import BiSO107FollowerPredictive
-
-        return BiSO107FollowerPredictive(config)
-    elif config.type == "virtual_bi_so107":
-        from .virtual_bi_so107 import VirtualBiSO107Follower
-
-        return VirtualBiSO107Follower(config)
-    elif config.type == "reachy2":
-        from .reachy2 import Reachy2Robot
-
-        return Reachy2Robot(config)
-    elif config.type == "openarm_follower":
-        from .openarm_follower import OpenArmFollower
-
-        return OpenArmFollower(config)
-    elif config.type == "bi_openarm_follower":
-        from .bi_openarm_follower import BiOpenArmFollower
-
-        return BiOpenArmFollower(config)
-    elif config.type == "rebot_b601_follower":
-        from .rebot_b601_follower import RebotB601Follower
-
-        return RebotB601Follower(config)
-    elif config.type == "bi_rebot_b601_follower":
-        from .bi_rebot_b601_follower import BiRebotB601Follower
-
-        return BiRebotB601Follower(config)
-    elif config.type == "mock_robot":
-        from tests.mocks.mock_robot import MockRobot
-
-        return MockRobot(config)
-    else:
-        try:
-            return cast(Robot, make_device_from_device_class(config))
-        except Exception as e:
-            raise ValueError(f"Error creating robot with config {config}: {e}") from e
+    # Concrete robot drivers live in external plugin packages. Any registered
+    # RobotConfig subclass is resolved to its Robot implementation by
+    # make_device_from_device_class (plugin loading by config-class name).
+    try:
+        return cast(Robot, make_device_from_device_class(config))
+    except Exception as e:
+        raise ValueError(f"Error creating robot with config {config}: {e}") from e
 
 
 # TODO(pepijn): Move to pipeline step to make sure we don't have to do this in the robot code and send action to robot is clean for use in dataset

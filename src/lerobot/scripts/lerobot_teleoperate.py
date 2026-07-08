@@ -74,9 +74,6 @@ import time
 from dataclasses import asdict, dataclass
 from pprint import pformat
 
-from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
-from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
-from lerobot.cameras.zmq import ZMQCameraConfig  # noqa: F401
 from lerobot.configs import parser
 from lerobot.processor import (
     RobotAction,
@@ -87,51 +84,15 @@ from lerobot.processor import (
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
-    bi_openarm_follower,
-    bi_rebot_b601_follower,
-    bi_so107_follower,
-    bi_so107_follower_predictive,
-    bi_so_follower,
-    earthrover_mini_plus,
-    hope_jr,
-    koch_follower,
     make_robot_from_config,
-    omx_follower,
-    openarm_follower,
-    reachy2,
-    rebot_b601_follower,
-    so107_follower_predictive,
-    so_follower,
-    so_follower_predictive,
-    unitree_g1 as unitree_g1_robot,
-    virtual_bi_so107,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
-    bi_openarm_leader,
-    bi_openarm_mini,
-    bi_rebot_102_leader,
-    bi_so107_leader,
-    bi_so107_leader_highrate,
-    bi_so_leader,
     gamepad,
-    homunculus,
     keyboard,
-    koch_leader,
     make_teleoperator_from_config,
-    omx_leader,
-    openarm_leader,
-    openarm_mini,
     quest_vr,
-    reachy2_teleoperator,
-    rebot_102_leader,
-    scripted_ee,
-    so107_leader_highrate,
-    so_leader,
-    so_leader_highrate,
-    trajectory_replay,
-    unitree_g1,
 )
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.latency import LatencySession

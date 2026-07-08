@@ -147,7 +147,7 @@ def _make_ee_action(x=0.0, y=0.0, z=0.0):
 
 
 def test_ee_bounds_keeps_fork_default_and_upstream_raise_flag():
-    from lerobot.robots.so_follower.robot_kinematic_processor import EEBoundsAndSafety
+    from lerobot.robots.robot_kinematic_processor import EEBoundsAndSafety
 
     fields = {f.name: f for f in EEBoundsAndSafety.__dataclass_fields__.values()}
     assert fields["max_ee_step_m"].default == 0.2  # fork's deliberate loosening (upstream: 0.05)

@@ -153,7 +153,6 @@ pink-dep = ["pin-pink>=4.2,<5", "qpsolvers[proxqp]>=4.12,<5"]
 transformers-dep = ["transformers>=5.4.0,<5.6.0"]
 grpcio-dep = ["grpcio>=1.73.1,<2.0.0", "protobuf>=6.31.1,<8.0.0"]
 accelerate-dep = ["accelerate>=1.14.0,<2.0.0"]
-can-dep = ["python-can>=4.2.0,<5.0.0"]
 peft-dep = ["peft>=0.18.0,<1.0.0"]
 scipy-dep = ["scipy>=1.14.0,<2.0.0"]
 diffusers-dep = ["diffusers>=0.27.2,<0.36.0"]
@@ -162,47 +161,14 @@ matplotlib-dep = ["matplotlib>=3.10.3,<4.0.0", "contourpy>=1.3.0,<2.0.0"] # NOTE
 pyserial-dep = ["pyserial>=3.5,<4.0"]
 deepdiff-dep = ["deepdiff>=7.0.1,<9.0.0"]
 pynput-dep = ["pynput>=1.7.8,<1.9.0"]
-pyzmq-dep = ["pyzmq>=26.2.1,<28.0.0"]
-motorbridge-dep = ["motorbridge>=0.3.2,<0.4.0"]
-motorbridge-smart-servo-dep = ["motorbridge-smart-servo>=0.0.4,<0.1.0"]
 timm-dep = ["timm>=1.0.0,<1.1.0"]
 
-# Motors
-feetech = ["feetech-servo-sdk>=1.0.0,<2.0.0", "lerobot[pyserial-dep]", "lerobot[deepdiff-dep]"]
-dynamixel = ["dynamixel-sdk>=3.7.31,<3.9.0", "lerobot[pyserial-dep]", "lerobot[deepdiff-dep]"]
-damiao = ["lerobot[can-dep]"]
-robstride = ["lerobot[can-dep]"]
-
-# Robots
-openarms = ["lerobot[damiao]"]
+# Robots / teleoperation input
+# NOTE: Concrete robot, motor, and camera drivers live in external plugin packages
+# (loaded at runtime via make_*_from_config). Only device-agnostic human-input teleop
+# and generic kinematics ship in-tree here.
 gamepad = ["lerobot[pygame-dep]", "hidapi>=0.14.0,<0.15.0"]
-hopejr = ["lerobot[feetech]", "lerobot[pygame-dep]"]
-lekiwi = ["lerobot[feetech]", "lerobot[pyzmq-dep]"]
-unitree_g1 = [
-    # "unitree-sdk2==1.0.1",
-    "lerobot[pyzmq-dep]",
-    "lerobot[pyserial-dep]",
-    "onnxruntime>=1.16.0,<2.0.0",
-    "onnx>=1.16.0,<2.0.0",
-    "meshcat>=0.3.0,<0.4.0",
-    "lerobot[matplotlib-dep]",
-    "lerobot[pygame-dep]",
-]
-# reachy2-sdk caps grpcio<=1.73.1 and protobuf<=6.32.0; quarantined here so downstream users aren't held back. reachy2-sdk is unlikely to release new versions.
-reachy2 = [
-    "reachy2_sdk>=1.0.15,<1.1.0",
-    "grpcio<=1.73.1",
-    "protobuf<=6.32.0",
-]
-# Seeed Studio reBot B601-DM follower (motorbridge / CAN) + StarArm102 / reBot Arm 102
-# leader (motorbridge-smart-servo / FashionStar UART servos).
-rebot = ["lerobot[motorbridge-dep]", "lerobot[motorbridge-smart-servo-dep]"]
 kinematics = ["lerobot[placo-dep]", "lerobot[pink-dep]"]
-intelrealsense = [
-    "pyrealsense2>=2.55.1.6486,<2.57.0 ; sys_platform != 'darwin'",
-    "pyrealsense2-macosx>=2.54,<2.57.0 ; sys_platform == 'darwin'",
-]
-phone = ["hebi-py>=2.8.0,<2.12.0", "teleop>=0.1.0,<0.2.0", "fastapi<1.0", "lerobot[scipy-dep]"]
 # Quest 3 WebXR teleop (fork-only). aiohttp serves the WebXR page over a
 # daemon-thread HTTPS server; the Cartesian IK a robot installs for this
 # teleop in attach_teleop needs pin-pink (see lerobot[pink-dep]).
@@ -241,7 +207,6 @@ fastwam = [
 ]
 evo1 = ["lerobot[transformers-dep]"]
 hilserl = ["lerobot[transformers-dep]", "lerobot[dataset]", "gym-hil>=0.1.14,<0.2.0", "lerobot[grpcio-dep]", "lerobot[placo-dep]"]
-vla_jepa = ["lerobot[transformers-dep]", "lerobot[diffusers-dep]", "lerobot[qwen-vl-utils-dep]"]
 lingbot_va = ["lerobot[transformers-dep]", "lerobot[diffusers-dep]", "lerobot[accelerate-dep]"]
 # HVLA (fork-only). Imported under src/lerobot/policies/hvla/. Mirrors what
 # transformers / matplotlib / sentencepiece / scikit-learn the modules
@@ -341,18 +306,8 @@ all = [
     # helps pip's resolver converge by constraining scipy early, before it encounters
     # the loose scipy requirements from transitive deps like dm-control and metaworld.
     "scipy>=1.14.0,<2.0.0",
-    "lerobot[dynamixel]",
-    "lerobot[feetech]",
-    "lerobot[damiao]",
-    "lerobot[robstride]",
     "lerobot[gamepad]",
-    "lerobot[hopejr]",
-    "lerobot[lekiwi]",
-    "lerobot[openarms]",
-    "lerobot[reachy2]",
-    "lerobot[rebot]",
     "lerobot[kinematics]",
-    "lerobot[intelrealsense]",
     "lerobot[diffusion]",
     "lerobot[multi_task_dit]",
     "lerobot[wallx]",
@@ -364,7 +319,6 @@ all = [
     "lerobot[xvla]",
     "lerobot[evo1]",
     "lerobot[hilserl]",
-    "lerobot[vla_jepa]",
     "lerobot[lingbot_va]",
     "lerobot[hvla]",
     "lerobot[gui]",
@@ -375,7 +329,6 @@ all = [
     "lerobot[video_benchmark]",
     "lerobot[aloha]",
     "lerobot[pusht]",
-    "lerobot[phone]",
     "lerobot[quest-vr]",
     "lerobot[libero]; sys_platform == 'linux'",
     "lerobot[metaworld]",
@@ -383,7 +336,6 @@ all = [
     "lerobot[robometer]",
     "lerobot[topreward]",
     "lerobot[peft]",
-    # "lerobot[unitree_g1]", TODO: Unitree requires specific installation instructions for unitree_sdk2
 ]
 
 # ─── Fork-only (TheWisp/lerobot) ──────────────────────────────────────────────
@@ -435,21 +387,16 @@ nebius = ["nebius>=0.3,<0.4"]
 
 [project.scripts]
 lerobot-calibrate="lerobot.scripts.lerobot_calibrate:main"
-lerobot-find-cameras="lerobot.scripts.lerobot_find_cameras:main"
-lerobot-find-port="lerobot.scripts.lerobot_find_port:main"
 lerobot-record="lerobot.scripts.lerobot_record:main"
 lerobot-replay="lerobot.scripts.lerobot_replay:main"
-lerobot-setup-motors="lerobot.scripts.lerobot_setup_motors:main"
 lerobot-teleoperate="lerobot.scripts.lerobot_teleoperate:main"
 lerobot-eval="lerobot.scripts.lerobot_eval:main"
 lerobot-train="lerobot.scripts.lerobot_train:main"
 lerobot-train-tokenizer="lerobot.scripts.lerobot_train_tokenizer:main"
 lerobot-dataset-viz="lerobot.scripts.lerobot_dataset_viz:main"
 lerobot-info="lerobot.scripts.lerobot_info:main"
-lerobot-find-joint-limits="lerobot.scripts.lerobot_find_joint_limits:main"
 lerobot-imgtransform-viz="lerobot.scripts.lerobot_imgtransform_viz:main"
 lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
-lerobot-setup-can="lerobot.scripts.lerobot_setup_can:main"
 lerobot-annotate="lerobot.scripts.lerobot_annotate:main"
 lerobot-rollout="lerobot.scripts.lerobot_rollout:main"
 lerobot-mcp="lerobot.mcp.cli:main"

@@ -131,8 +131,6 @@ def save_policy_to_safetensors(output_dir: Path, ds_repo_id: str, policy_name: s
 
 if __name__ == "__main__":
     artifacts_cfg = [
-        ("lerobot/xarm_lift_medium", "tdmpc", {"use_mpc": False}, "use_policy"),
-        ("lerobot/xarm_lift_medium", "tdmpc", {"use_mpc": True}, "use_mpc"),
         (
             "lerobot/pusht",
             "diffusion",

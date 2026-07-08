@@ -69,7 +69,7 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
             params: Parameters to optimize. Accepts multiple formats depending on the optimizer:
                 - Iterable[Parameter]: From model.parameters() - standard PyTorch usage
                 - Iterable[dict]: List of param groups with 'params' key and optional
-                  'lr', 'weight_decay' overrides (e.g., ACT, VQBeT policies)
+                  'lr', 'weight_decay' overrides (e.g., ACT policies)
                 - dict[str, Parameter]: From dict(model.named_parameters()) for optimizers
                   that apply differential learning rates by parameter name (e.g., XVLA)
                 - dict[str, Iterable]: For multi-optimizer configs where each key maps to

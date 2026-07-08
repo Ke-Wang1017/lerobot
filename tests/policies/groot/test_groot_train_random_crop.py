@@ -20,7 +20,7 @@ Isaac-GR00T crops a random ``crop_fraction`` window during training and the
 deterministic center window at eval, replaying the sampled window across all
 camera views of a sample (gr00t/data/transform/video.py, n1.5-release onward:
 "If mode is 'train', return a random crop transform. If mode is 'eval', return
-a center crop transform."). This mirrors LeRobot's own Diffusion/VQBeT
+a center crop transform."). This mirrors LeRobot's own Diffusion
 ``crop_is_random`` pattern. Color jitter is intentionally out of scope here.
 """
 

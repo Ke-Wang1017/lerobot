@@ -62,13 +62,12 @@ This fork installs from source (it carries extra dependencies — GUI, MCP, clou
 behind optional extras) and uses [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/TheWisp/lerobot.git
+git clone https://github.com/Ke-Wang1017/lerobot.git
 cd lerobot
 
 uv sync --extra gui --extra mcp        # GUI + AI-native server
-# add --extra nebius                    for ephemeral cloud training
+# add --extra nebius                    for ephemeral cloud training on Nebius
 # add --extra dataset                   for video decoding in the MCP tools
-# uv sync --extra all                   for everything
 ```
 
 Run any LeRobot command through `uv run` (e.g. `uv run lerobot-info`).

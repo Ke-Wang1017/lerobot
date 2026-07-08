@@ -1683,11 +1683,11 @@ def build_server(
 
         Args:
             name: Unique profile name (filename will be ``<name>.json``).
-            type: ``RobotConfig`` choice — e.g. ``'bi_so107_follower'``,
-                ``'virtual_bi_so107'``. ``list_robot_profiles`` shows
-                examples already saved; full schema via the GUI.
+            type: ``RobotConfig`` choice registered by an installed robot
+                plugin package. ``list_robot_profiles`` shows examples
+                already saved; full schema via the GUI.
             fields: Type-specific config (e.g. ``{"port": "/dev/ttyACM0",
-                "baudrate": 1000000}`` for a Feetech-backed arm).
+                "baudrate": 1000000}`` for a serial-backed arm).
             cameras: Camera config dict keyed by name.
             rest_position: Per-joint rest target.
 

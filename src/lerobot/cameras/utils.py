@@ -26,32 +26,13 @@ def make_cameras_from_configs(camera_configs: dict[str, CameraConfig]) -> dict[s
     cameras: dict[str, Camera] = {}
 
     for key, cfg in camera_configs.items():
-        # TODO(Steven): Consider just using the make_device_from_device_class for all types
-        if cfg.type == "opencv":
-            from .opencv import OpenCVCamera
-
-            cameras[key] = OpenCVCamera(cfg)
-
-        elif cfg.type == "intelrealsense":
-            from .realsense.camera_realsense import RealSenseCamera
-
-            cameras[key] = RealSenseCamera(cfg)
-
-        elif cfg.type == "reachy2_camera":
-            from .reachy2_camera.reachy2_camera import Reachy2Camera
-
-            cameras[key] = Reachy2Camera(cfg)
-
-        elif cfg.type == "zmq":
-            from .zmq.camera_zmq import ZMQCamera
-
-            cameras[key] = ZMQCamera(cfg)
-
-        else:
-            try:
-                cameras[key] = cast(Camera, make_device_from_device_class(cfg))
-            except Exception as e:
-                raise ValueError(f"Error creating camera {key} with config {cfg}: {e}") from e
+        # Concrete camera backends (OpenCV, RealSense, ...) live in external plugin
+        # packages. Any registered CameraConfig subclass resolves to its Camera
+        # implementation via make_device_from_device_class (plugin loading by name).
+        try:
+            cameras[key] = cast(Camera, make_device_from_device_class(cfg))
+        except Exception as e:
+            raise ValueError(f"Error creating camera {key} with config {cfg}: {e}") from e
 
     return cameras
 

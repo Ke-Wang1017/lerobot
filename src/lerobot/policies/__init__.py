@@ -30,9 +30,7 @@ from .pi0_fast.configuration_pi0_fast import PI0FastConfig as PI0FastConfig
 from .pi05.configuration_pi05 import PI05Config as PI05Config
 from .pretrained import PreTrainedPolicy as PreTrainedPolicy
 from .smolvla.configuration_smolvla import SmolVLAConfig as SmolVLAConfig
-from .tdmpc.configuration_tdmpc import TDMPCConfig as TDMPCConfig
 from .utils import make_robot_action, prepare_observation_for_inference
-from .vqbet.configuration_vqbet import VQBeTConfig as VQBeTConfig
 from .wall_x.configuration_wall_x import WallXConfig as WallXConfig
 from .xvla.configuration_xvla import XVLAConfig as XVLAConfig
 
@@ -56,8 +54,6 @@ __all__ = [
     "PI0FastConfig",
     "PI05Config",
     "SmolVLAConfig",
-    "TDMPCConfig",
-    "VQBeTConfig",
     "WallXConfig",
     "XVLAConfig",
     # Base class

@@ -59,10 +59,7 @@ from .pi0.configuration_pi0 import PI0Config
 from .pi05.configuration_pi05 import PI05Config
 from .pretrained import PreTrainedPolicy
 from .smolvla.configuration_smolvla import SmolVLAConfig
-from .tdmpc.configuration_tdmpc import TDMPCConfig
 from .utils import validate_visual_features_consistency
-from .vla_jepa.configuration_vla_jepa import VLAJEPAConfig
-from .vqbet.configuration_vqbet import VQBeTConfig
 from .wall_x.configuration_wall_x import WallXConfig
 from .xvla.configuration_xvla import XVLAConfig
 
@@ -93,8 +90,8 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
     at once, improving startup time and reducing dependencies.
 
     Args:
-        name: The name of the policy. Supported names are "tdmpc", "diffusion", "act",
-            "multi_task_dit", "vqbet", "pi0", "pi05", "gaussian_actor", "smolvla", "wall_x",
+        name: The name of the policy. Supported names are "diffusion", "act",
+            "multi_task_dit", "pi0", "pi05", "gaussian_actor", "smolvla", "wall_x",
             "molmoact2", "eo1", "evo1".
     Returns:
         The policy class corresponding to the given name.
@@ -124,11 +121,7 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
 def _get_policy_class_impl(name: str) -> type[PreTrainedPolicy]:
     """Original :func:`get_policy_class` body — kept private so the
     public function can wrap ImportError uniformly with install hints."""
-    if name == "tdmpc":
-        from .tdmpc.modeling_tdmpc import TDMPCPolicy
-
-        return TDMPCPolicy
-    elif name == "diffusion":
+    if name == "diffusion":
         from .diffusion.modeling_diffusion import DiffusionPolicy
 
         return DiffusionPolicy
@@ -144,10 +137,6 @@ def _get_policy_class_impl(name: str) -> type[PreTrainedPolicy]:
         from .multi_task_dit.modeling_multi_task_dit import MultiTaskDiTPolicy
 
         return MultiTaskDiTPolicy
-    elif name == "vqbet":
-        from .vqbet.modeling_vqbet import VQBeTPolicy
-
-        return VQBeTPolicy
     elif name == "pi0":
         from .pi0.modeling_pi0 import PI0Policy
 
@@ -188,10 +177,6 @@ def _get_policy_class_impl(name: str) -> type[PreTrainedPolicy]:
         from .molmoact2.modeling_molmoact2 import MolmoAct2Policy
 
         return MolmoAct2Policy
-    elif name == "vla_jepa":
-        from .vla_jepa.modeling_vla_jepa import VLAJEPAPolicy
-
-        return VLAJEPAPolicy
     elif name == "lingbot_va":
         from .lingbot_va.modeling_lingbot_va import LingBotVAPolicy
 
@@ -219,8 +204,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
     mapping a string identifier to the corresponding config class.
 
     Args:
-        policy_type: The type of the policy. Supported types include "tdmpc",
-                     "multi_task_dit", "diffusion", "act", "vqbet", "pi0", "pi05", "gaussian_actor",
+        policy_type: The type of the policy. Supported types include
+                     "multi_task_dit", "diffusion", "act", "pi0", "pi05", "gaussian_actor",
                      "smolvla", "wall_x", "molmoact2", "eo1", "evo1".
         **kwargs: Keyword arguments to be passed to the configuration class constructor.
 
@@ -230,9 +215,7 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
     Raises:
         ValueError: If the `policy_type` is not recognized.
     """
-    if policy_type == "tdmpc":
-        return TDMPCConfig(**kwargs)
-    elif policy_type == "diffusion":
+    if policy_type == "diffusion":
         return DiffusionConfig(**kwargs)
     elif policy_type == "act":
         return ACTConfig(**kwargs)
@@ -240,8 +223,6 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return ACTWithVLMConfig(**kwargs)
     elif policy_type == "multi_task_dit":
         return MultiTaskDiTConfig(**kwargs)
-    elif policy_type == "vqbet":
-        return VQBeTConfig(**kwargs)
     elif policy_type == "pi0":
         return PI0Config(**kwargs)
     elif policy_type == "pi05":
@@ -260,8 +241,6 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return EO1Config(**kwargs)
     elif policy_type == "molmoact2":
         return MolmoAct2Config(**kwargs)
-    elif policy_type == "vla_jepa":
-        return VLAJEPAConfig(**kwargs)
     elif policy_type == "lingbot_va":
         return LingBotVAConfig(**kwargs)
     elif policy_type == "fastwam":
@@ -314,7 +293,7 @@ def make_pre_post_processors(
     This function acts as a factory. It can either load existing processor pipelines
     from a pretrained path or create new ones from scratch based on the policy
     configuration. Each policy type has a dedicated factory function for its
-    processors (e.g., `make_tdmpc_pre_post_processors`).
+    processors (e.g., `make_diffusion_pre_post_processors`).
 
     Args:
         policy_cfg: The configuration of the policy for which to create processors.
@@ -381,15 +360,7 @@ def make_pre_post_processors(
         return preprocessor, postprocessor
 
     # Create a new processor based on policy type
-    if isinstance(policy_cfg, TDMPCConfig):
-        from .tdmpc.processor_tdmpc import make_tdmpc_pre_post_processors
-
-        processors = make_tdmpc_pre_post_processors(
-            config=policy_cfg,
-            dataset_stats=kwargs.get("dataset_stats"),
-        )
-
-    elif isinstance(policy_cfg, DiffusionConfig):
+    if isinstance(policy_cfg, DiffusionConfig):
         from .diffusion.processor_diffusion import make_diffusion_pre_post_processors
 
         processors = make_diffusion_pre_post_processors(
@@ -419,14 +390,6 @@ def make_pre_post_processors(
         )
 
         processors = make_multi_task_dit_pre_post_processors(
-            config=policy_cfg,
-            dataset_stats=kwargs.get("dataset_stats"),
-        )
-
-    elif isinstance(policy_cfg, VQBeTConfig):
-        from .vqbet.processor_vqbet import make_vqbet_pre_post_processors
-
-        processors = make_vqbet_pre_post_processors(
             config=policy_cfg,
             dataset_stats=kwargs.get("dataset_stats"),
         )
@@ -514,14 +477,6 @@ def make_pre_post_processors(
             dataset_meta=kwargs.get("dataset_meta"),
         )
 
-    elif isinstance(policy_cfg, VLAJEPAConfig):
-        from .vla_jepa.processor_vla_jepa import make_vla_jepa_pre_post_processors
-
-        processors = make_vla_jepa_pre_post_processors(
-            config=policy_cfg,
-            dataset_stats=kwargs.get("dataset_stats"),
-        )
-
     elif isinstance(policy_cfg, LingBotVAConfig):
         from .lingbot_va.processor_lingbot_va import make_lingbot_va_pre_post_processors
 
@@ -579,24 +534,9 @@ def make_policy(
 
     Raises:
         ValueError: If both or neither of `ds_meta` and `env_cfg` are provided.
-        NotImplementedError: If attempting to use an unsupported policy-backend
-                             combination (e.g., VQBeT with 'mps').
     """
     if bool(ds_meta) == bool(env_cfg):
         raise ValueError("Either one of a dataset metadata or a sim env must be provided.")
-
-    # NOTE: Currently, if you try to run vqbet with mps backend, you'll get this error.
-    # TODO(aliberts, rcadene): Implement a check_backend_compatibility in policies?
-    # NotImplementedError: The operator 'aten::unique_dim' is not currently implemented for the MPS device. If
-    # you want this op to be added in priority during the prototype phase of this feature, please comment on
-    # https://github.com/pytorch/pytorch/issues/77764. As a temporary fix, you can set the environment
-    # variable `PYTORCH_ENABLE_MPS_FALLBACK=1` to use the CPU as a fallback for this op. WARNING: this will be
-    # slower than running natively on MPS.
-    if cfg.type == "vqbet" and cfg.device == "mps":
-        raise NotImplementedError(
-            "Current implementation of VQBeT does not support `mps` backend. "
-            "Please use `cpu` or `cuda` backend."
-        )
 
     policy_cls = get_policy_class(cfg.type)
 
@@ -760,7 +700,7 @@ def _make_processors_from_policy_config(
 # 'lerobot[<extra>]'" hints in :func:`check_policy_registry_health` when a
 # policy's modeling module fails to import (typical cause: env missing a
 # transitive dep like `num2words` for SmolVLA). Only policies that have a
-# dedicated upstream extra are listed; others (act, sac, tdmpc, vqbet, rtc,
+# dedicated upstream extra are listed; others (act, sac, rtc,
 # reward_classifier) fall back to ``all`` — those are policies without
 # special deps today, so an ImportError on them most likely means a base
 # dep is missing, which ``[all]`` covers. The map deliberately uses the
@@ -780,7 +720,7 @@ _POLICY_NAME_TO_EXTRA: dict[str, str] = {
     "wall_x": "wallx",
     "hilserl": "hilserl",
     # Fall-throughs (any policy not listed defaults to `all`):
-    #   tdmpc, act, vqbet, sac, reward_classifier, rtc — no dedicated extra
+    #   act, sac, reward_classifier, rtc — no dedicated extra
     #   in upstream pyproject.toml today; if one of these surfaces an
     #   ImportError, the hint suggests `all` which covers everything.
 }
