@@ -10,7 +10,7 @@
 <body>
     <div class="tab-bar">
         <button class="tab active" data-tab="data" onclick="switchTab('data')">Data</button>
-        <button class="tab" data-tab="model" onclick="switchTab('model')">Model</button>
+        <button class="tab" data-tab="model" onclick="switchTab('model')">Train</button>
         <button class="tab" data-tab="run" onclick="switchTab('run')">Run</button>
         <button class="tab" data-tab="robot" onclick="switchTab('robot')">Robot</button>
         <span id="hf-auth-indicator" style="margin-left:auto; font-size:11px; color:var(--text-secondary, #666); padding-right:12px; cursor:default;" title="HuggingFace Hub login status"></span>
@@ -163,14 +163,7 @@
         <div class="layout">
             <div class="sidebar" id="model-sidebar">
                 <div class="sidebar-header">
-                    <h1>Models</h1>
-                </div>
-                <div class="sidebar-section sources-section">
-                    <div class="section-label">
-                        <span>Sources</span>
-                        <button class="btn-small" onclick="addModelSource()" title="Add model source folder">+</button>
-                    </div>
-                    <div id="model-sources-container"></div>
+                    <h1>Train</h1>
                 </div>
                 <div class="sidebar-section" id="training-section">
                     <div class="section-label">
@@ -183,6 +176,13 @@
                     </div>
                     <div id="training-hosts-info" style="font-size: 11px; color: var(--text-secondary, #666); padding: 4px 8px;">Loading hosts…</div>
                     <div id="training-runs-list"></div>
+                </div>
+                <div class="sidebar-section sources-section">
+                    <div class="section-label">
+                        <span>Trained models</span>
+                        <button class="btn-small" onclick="addModelSource()" title="Add model source folder">+</button>
+                    </div>
+                    <div id="model-sources-container"></div>
                 </div>
             </div>
             <div class="sidebar-resize-handle"></div>
@@ -628,7 +628,7 @@ nebius iam auth-public-key generate \
     <script src="/static/robot.js?v=18"></script>
     <script src="/static/run.js?v=45"></script>
     <script src="/static/model.js?v=5"></script>
-    <script src="/static/training.js?v=23"></script>
+    <script src="/static/training.js?v=24"></script>
     <script src="/static/add_host_dialog.js?v=4"></script>
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>

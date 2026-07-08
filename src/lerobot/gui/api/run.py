@@ -884,7 +884,7 @@ async def get_rlt_config() -> dict:
     """
     import json as _json
 
-    from lerobot.policies.hvla.rlt.config import RLTConfig
+    from lerobot.policies.rlt.config import RLTConfig
 
     defaults = RLTConfig()
     # ``active`` lets the GUI distinguish "no session — defaults" from

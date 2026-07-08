@@ -14,9 +14,10 @@ import threading
 import pytest
 import torch
 
-from lerobot.policies.hvla.rlt.actor_critic import RLTActor, RLTCritic, TD3Agent
-from lerobot.policies.hvla.rlt.config import RLTConfig
-from lerobot.policies.hvla.rlt.metrics import (
+from lerobot.policies.hvla.s1_process import _atomic_torch_save
+from lerobot.policies.rlt.actor_critic import RLTActor, RLTCritic, TD3Agent
+from lerobot.policies.rlt.config import RLTConfig
+from lerobot.policies.rlt.metrics import (
     RLTMetrics,
     get_metrics,
     load_metrics_from_file,
@@ -24,15 +25,14 @@ from lerobot.policies.hvla.rlt.metrics import (
     save_metrics_to_file,
     set_metrics_path,
 )
-from lerobot.policies.hvla.rlt.replay_buffer import ReplayBuffer, TransactionalReplayBuffer
-from lerobot.policies.hvla.rlt.token import (
+from lerobot.policies.rlt.replay_buffer import ReplayBuffer, TransactionalReplayBuffer
+from lerobot.policies.rlt.token import (
     RLTokenDecoder,
     RLTokenEncoder,
     load_rlt_token_config,
     rl_token_reconstruction_loss,
     save_rlt_token_config,
 )
-from lerobot.policies.hvla.s1_process import _atomic_torch_save
 
 # Small dims for speed — relationships (ratios, formulas) don't depend on size.
 D = 64
@@ -460,7 +460,7 @@ class TestQExplosionDefenses:
         explicitly."""
         # Don't pass shared_noise_per_chunk to RLTConfig; the fixture
         # also doesn't set it. We rely on the dataclass default.
-        from lerobot.policies.hvla.rlt.config import RLTConfig
+        from lerobot.policies.rlt.config import RLTConfig
 
         assert RLTConfig().shared_noise_per_chunk is True
         # Smoke check: the fixture's config still inherits the default

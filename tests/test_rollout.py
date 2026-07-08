@@ -61,6 +61,7 @@ def test_strategy_config_types():
         DAggerStrategyConfig,
         EpisodicStrategyConfig,
         HighlightStrategyConfig,
+        RLTStrategyConfig,
         SentryStrategyConfig,
     )
 
@@ -69,6 +70,24 @@ def test_strategy_config_types():
     assert HighlightStrategyConfig().type == "highlight"
     assert DAggerStrategyConfig().type == "dagger"
     assert EpisodicStrategyConfig().type == "episodic"
+    assert RLTStrategyConfig().type == "rlt"
+
+
+def test_rlt_config_invalid_input_device():
+    from lerobot.rollout import RLTStrategyConfig
+
+    with pytest.raises(ValueError, match="input_device must be 'keyboard' or 'pedal'"):
+        RLTStrategyConfig(input_device="joystick")
+
+
+def test_rlt_config_defaults():
+    from lerobot.rollout import RLTStrategyConfig
+
+    cfg = RLTStrategyConfig()
+    assert cfg.rl_chunk_length == 10
+    assert cfg.output_dir == "outputs/rlt_online"
+    assert cfg.start_engaged is True
+    assert cfg.deploy is False
 
 
 def test_dagger_config_invalid_input_device():
@@ -207,6 +226,8 @@ def test_create_strategy_dispatches():
         DAggerStrategyConfig,
         EpisodicStrategy,
         EpisodicStrategyConfig,
+        RLTStrategy,
+        RLTStrategyConfig,
         SentryStrategy,
         SentryStrategyConfig,
         create_strategy,
@@ -216,6 +237,30 @@ def test_create_strategy_dispatches():
     assert isinstance(create_strategy(SentryStrategyConfig()), SentryStrategy)
     assert isinstance(create_strategy(DAggerStrategyConfig()), DAggerStrategy)
     assert isinstance(create_strategy(EpisodicStrategyConfig()), EpisodicStrategy)
+    assert isinstance(create_strategy(RLTStrategyConfig()), RLTStrategy)
+
+
+def test_rlt_strategy_is_intervention_strategy():
+    """RLT reuses the shared human-in-the-loop mechanism (DAgger's base)."""
+    from lerobot.rollout import RLTStrategy, RLTStrategyConfig
+    from lerobot.rollout.strategies import InterventionStrategy
+
+    strategy = RLTStrategy(RLTStrategyConfig())
+    assert isinstance(strategy, InterventionStrategy)
+    # The shared no-op training hooks are present for RLT to override.
+    for hook in ("on_tick", "on_transition", "on_terminal", "background_step"):
+        assert hasattr(strategy, hook)
+
+
+def test_rlt_adapter_resolution_rejects_unknown_policy():
+    """Unknown policies get an actionable error pointing at Phase 4."""
+    from lerobot.rollout.strategies.rlt import resolve_rlt_adapter
+
+    class _UnsupportedPolicy:
+        pass
+
+    with pytest.raises(NotImplementedError, match="Phase 4"):
+        resolve_rlt_adapter(_UnsupportedPolicy())
 
 
 def test_create_strategy_unknown_raises():

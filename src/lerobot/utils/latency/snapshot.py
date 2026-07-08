@@ -16,7 +16,7 @@
 
 """1 Hz JSON snapshot writer for the GUI to read cross-process.
 
-Mirrors the RLT pattern (``policies/hvla/rlt/metrics.py`` →
+Mirrors the RLT pattern (``policies/rlt/metrics.py`` →
 ``outputs/rlt_online/metrics.json``): the loop process writes a small
 ``latency_snapshot.json`` to a known location at ~1 Hz; the GUI's
 ``/api/latency-metrics`` endpoint reads it and serves to the frontend.

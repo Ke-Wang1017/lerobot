@@ -338,7 +338,7 @@ class TestRLTChunkDump:
     """
 
     def _make_thread_with_rlt(self, tmp_path, dump_on=True):
-        from lerobot.policies.hvla.rlt.config import RLTConfig
+        from lerobot.policies.rlt.config import RLTConfig
 
         policy = MockS1Policy()
         # Disable normalization so ref_norm is numerically just the raw chunk.

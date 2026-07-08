@@ -1012,6 +1012,14 @@ function trainingRenderStartForm(prefill) {
           <span class="training-field-hint">Datasets are discovered from sources configured in the Data tab.</span>
         </label>
 
+        <label class="training-field">
+          <span class="training-field-label">Finetune model path</span>
+          <input type="text" name="finetune_path" list="training-finetune-list" autocomplete="off"
+                 placeholder="(optional — leave blank to train from scratch)" />
+          <datalist id="training-finetune-list"><!-- populated by trainingPopulateFinetuneOptions --></datalist>
+          <span class="training-field-hint">Start from an existing checkpoint instead of random init. Pick a discovered checkpoint from the Trained models list, or type a path / HF Hub repo id. The Policy above must match the checkpoint's policy type. Local paths only work for local-host training.</span>
+        </label>
+
         <details class="training-section" open>
           <summary class="training-section-summary">Policy hyperparameters</summary>
           <div id="training-policy-fields"><!-- populated by trainingRenderPolicyFields --></div>
@@ -1038,6 +1046,74 @@ function trainingRenderStartForm(prefill) {
     trainingPolicyFromArgs(prefill?.args) || _trainingPolicyCatalog[0]?.type_name || "";
   trainingRenderPolicyFields(initialPolicy);
   if (prefill) trainingApplyPrefill(prefill, initialPolicy);
+  // Fill the finetune-base datalist from discovered checkpoints (async;
+  // the field is usable as free text meanwhile).
+  trainingPopulateFinetuneOptions();
+}
+
+// Discover local checkpoints usable as a finetune base, from the same model
+// sources the Trained models section scans. Each entry's ``default_policy_path``
+// is the layout-aware weights dir (contains config.json + model.safetensors).
+async function trainingFetchFinetuneCandidates() {
+  try {
+    const res = await fetch("/api/models/sources");
+    if (!res.ok) return [];
+    const sources = await res.json();
+    const lists = await Promise.all(
+      sources.map((s) =>
+        fetch(`/api/models/sources/${encodeURIComponent(s.path)}/models`)
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => [])
+      )
+    );
+    const out = [];
+    const seen = new Set();
+    for (const models of lists) {
+      for (const m of models) {
+        const path = m.default_policy_path;
+        if (!path || seen.has(path)) continue;
+        seen.add(path);
+        out.push({ path, name: m.name || path, policy_type: m.policy_type || "" });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+async function trainingPopulateFinetuneOptions() {
+  const dl = document.getElementById("training-finetune-list");
+  if (!dl) return;
+  const candidates = await trainingFetchFinetuneCandidates();
+  // The form may have been torn down while we awaited; re-check.
+  if (!document.getElementById("training-finetune-list")) return;
+  dl.innerHTML = candidates
+    .map(
+      (c) =>
+        `<option value="${escapeHtml(c.path)}">${escapeHtml(c.name)}${
+          c.policy_type ? " — " + escapeHtml(c.policy_type) : ""
+        }</option>`
+    )
+    .join("");
+  // When the user selects a discovered checkpoint, align the Policy dropdown
+  // to that checkpoint's policy type — mixing them makes lerobot-train load a
+  // config that contradicts the selected policy.
+  const input = document.querySelector("#training-start-form input[name=finetune_path]");
+  if (input && !input._finetuneWired) {
+    input._finetuneWired = true;
+    input.addEventListener("change", () => {
+      const hit = candidates.find((c) => c.path === input.value);
+      if (!hit || !hit.policy_type) return;
+      const polSel = document.querySelector("#training-start-form select[name=policy_type]");
+      if (!polSel) return;
+      const known = Array.from(polSel.options).some((o) => o.value === hit.policy_type);
+      if (known && polSel.value !== hit.policy_type) {
+        polSel.value = hit.policy_type;
+        trainingRenderPolicyFields(hit.policy_type);
+      }
+    });
+  }
 }
 
 // Map a Run.args dict back to its policy_type key. Inverse of
@@ -1082,6 +1158,14 @@ function trainingApplyPrefill(prefill, policyType) {
   if (prefill.recipe_name) {
     const labelInput = form.querySelector("input[name=recipe_name]");
     if (labelInput) labelInput.value = prefill.recipe_name;
+  }
+
+  // Finetune base — arg key (policy.pretrained_path) differs from the input
+  // name (finetune_path), so the generic field loop below won't fill it.
+  const prefillArgs = prefill.args || {};
+  if (prefillArgs["policy.pretrained_path"]) {
+    const fpInput = form.querySelector("input[name=finetune_path]");
+    if (fpInput) fpInput.value = String(prefillArgs["policy.pretrained_path"]);
   }
 
   // Fill each field by its FORM KEY (= arg_key_prefix + field.name).
@@ -1213,6 +1297,22 @@ async function trainingSubmitStart(ev) {
   for (const f of TRAINING_FIELDS) {
     const v = formValue(fd, form, f);
     if (v !== undefined) args[f.key] = v;
+  }
+
+  // Finetune base (optional): continue training from an existing checkpoint
+  // instead of random init. Only draccus recipes (recipe == null) accept
+  // ``--policy.pretrained_path``; skip for non-draccus recipes (e.g. HVLA).
+  const finetunePath = (fd.get("finetune_path") || "").trim();
+  if (finetunePath) {
+    if (recipe) {
+      const errEl = document.getElementById("training-start-error");
+      if (errEl) {
+        errEl.style.display = "block";
+        errEl.textContent = `Finetuning from a checkpoint isn't supported for the ${policyType} recipe yet — clear the "Finetune model path" field to train from scratch.`;
+      }
+      return;
+    }
+    args["policy.pretrained_path"] = finetunePath;
   }
 
   // Auto-generate a label if user didn't provide one

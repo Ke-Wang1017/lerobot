@@ -181,12 +181,6 @@ def build_rollout_context(
     if hasattr(policy_config, "compile_model"):
         policy_config.compile_model = cfg.use_torch_compile
 
-    if policy_config.type == "vqbet" and cfg.device == "mps":
-        raise NotImplementedError(
-            "Current implementation of VQBeT does not support `mps` backend. "
-            "Please use `cpu` or `cuda` backend."
-        )
-
     if policy_config.use_peft:
         from peft import PeftConfig, PeftModel
 

@@ -314,7 +314,7 @@ class TestActorDtypeParity:
         matching how it was trained. Captured by wrapping the actor in a
         mock that records input dtypes and exercising the inference-side
         autocast + _rlt_inference_step path."""
-        from lerobot.policies.hvla.rlt.config import RLTConfig
+        from lerobot.policies.rlt.config import RLTConfig
         from lerobot.policies.hvla.s1_inference import InferenceThread
         from lerobot.policies.hvla.s1_process import JOINT_NAMES
 

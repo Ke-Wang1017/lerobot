@@ -47,7 +47,7 @@ class InterventionRecorder:
     def __init__(
         self,
         replay: Any,  # ReplayBuffer — typed Any to avoid circular import
-        policy: Any,  # S1 policy (for normalization stats)
+        adapter: Any,  # RLTPolicyAdapter (for state/action normalization)
         device: torch.device,
         chunk_length: int,
         joint_names: list[str],
@@ -55,7 +55,7 @@ class InterventionRecorder:
         assert chunk_length > 0, f"chunk_length must be positive, got {chunk_length}"
         assert len(joint_names) > 0, "joint_names must not be empty"
         self._replay = replay
-        self._policy = policy
+        self._adapter = adapter
         self._device = device
         self._C = chunk_length
         self._joint_names = joint_names
@@ -196,17 +196,11 @@ class InterventionRecorder:
             dtype=np.float32,
         )
         state_t = torch.from_numpy(state_np).to(self._device)
-        if self._policy._state_mean is not None:
-            state_t = (state_t - self._policy._state_mean.to(self._device)) / self._policy._state_std.to(
-                self._device
-            )
-        return state_t
+        return self._adapter.normalize_state(state_t)
 
     def _normalize_action(self, action_np: np.ndarray) -> Tensor:
         a_t = torch.from_numpy(action_np).float()
-        if self._policy._action_mean is not None:
-            a_t = (a_t - self._policy._action_mean) / self._policy._action_std
-        return a_t
+        return self._adapter.normalize_action(a_t)
 
     def _flush_chunk(self) -> None:
         # Two invariants the caller must have established:

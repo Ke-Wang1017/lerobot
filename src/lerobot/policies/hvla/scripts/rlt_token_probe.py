@@ -37,7 +37,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from lerobot.policies.hvla.rlt.token import (
+from lerobot.policies.rlt.token import (
     RLTokenDecoder,
     RLTokenEncoder,
     load_rlt_token_config,

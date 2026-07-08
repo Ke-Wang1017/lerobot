@@ -78,8 +78,8 @@ def main() -> int:
     # critic and running forward. This gives us a sanity check on Q range.
     if critic_path.exists() and actor_path.exists():
         try:
-            from lerobot.policies.hvla.rlt.actor_critic import RLTCritic
-            from lerobot.policies.hvla.rlt.config import RLTConfig
+            from lerobot.policies.rlt.actor_critic import RLTCritic
+            from lerobot.policies.rlt.config import RLTConfig
         except Exception as e:
             print(f"\n(skipping critic eval — import failed: {e})")
             return 0

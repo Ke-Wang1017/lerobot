@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from lerobot.gui.training.recipes import (
+    CONTAINER_FINETUNE_BASE,
     CONTAINER_HF_CACHE,
     CONTAINER_OUTPUT_SUBDIR,
     CONTAINER_RUNS_MOUNT,
@@ -150,6 +151,42 @@ def test_docker_recipe_bind_mounts(tmp_path: Path) -> None:
     assert f"{HOST_HOME_TOKEN}/.cache/huggingface:{CONTAINER_HF_CACHE}" in cmd
     # Run dir mount
     assert f"{paths.root}:{CONTAINER_RUNS_MOUNT}" in cmd
+
+
+def test_finetune_local_checkpoint_is_mounted_and_rewritten(tmp_path: Path) -> None:
+    """A local checkpoint dir as the finetune base is bind-mounted read-only
+    and the flag is rewritten to the in-container path, so weights outside the
+    two default mounts are still reachable."""
+    paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
+    paths.ensure_exists()
+    ckpt = tmp_path / "outputs" / "run" / "checkpoints" / "1000" / "pretrained_model"
+    ckpt.mkdir(parents=True)
+    run = _make_run({"policy.type": "act", "policy.pretrained_path": str(ckpt)})
+    cmd = _docker_cmd(run, paths)
+    assert f"{ckpt}:{CONTAINER_FINETUNE_BASE}:ro" in cmd
+    assert f"--policy.pretrained_path={CONTAINER_FINETUNE_BASE}" in cmd
+    # The raw host path must not leak into the flag.
+    assert f"--policy.pretrained_path={ckpt}" not in cmd
+
+
+def test_finetune_hub_repo_id_passes_through_without_mount(tmp_path: Path) -> None:
+    """A Hub repo id (not an existing local dir) is forwarded unchanged and
+    resolved inside the container via the mounted HF cache — no extra mount."""
+    paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _make_run({"policy.type": "act", "policy.pretrained_path": "lerobot/act_aloha"})
+    cmd = _docker_cmd(run, paths)
+    assert "--policy.pretrained_path=lerobot/act_aloha" in cmd
+    assert not any(CONTAINER_FINETUNE_BASE in t for t in cmd)
+
+
+def test_finetune_empty_path_is_dropped(tmp_path: Path) -> None:
+    """A blank finetune path emits no pretrained_path flag (train from scratch)."""
+    paths = RunPaths.for_run("abc123", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _make_run({"policy.type": "act", "policy.pretrained_path": "  "})
+    cmd = _docker_cmd(run, paths)
+    assert not any(t.startswith("--policy.pretrained_path") for t in cmd)
 
 
 def test_docker_recipe_forces_safety_flags(tmp_path: Path) -> None:

@@ -781,11 +781,65 @@ def _scan_source(source_path: str, max_depth: int = 3) -> list[dict]:
     return found
 
 
+def _resolve_hub_cache_snapshot(repo_dir: Path) -> Path | None:
+    """Resolve the active snapshot dir of an HF hub cache repo folder.
+
+    `LeRobotDataset(repo_id)` (and any bare `snapshot_download`) stores datasets
+    in the HF hub cache layout `datasets--owner--name/snapshots/<commit>/`, not
+    the flat `owner/name/` layout the GUI downloader writes. The commit hash dir
+    is too deep for the generic depth-limited scan and there can be several of
+    them, so resolve the one `refs/main` points at (newest as a fallback).
+    """
+    snapshots = repo_dir / "snapshots"
+    if not snapshots.is_dir():
+        return None
+    ref = repo_dir / "refs" / "main"
+    if ref.is_file():
+        try:
+            candidate = snapshots / ref.read_text().strip()
+            if candidate.is_dir():
+                return candidate
+        except OSError:
+            pass
+    # No usable refs/main — fall back to the most recently modified snapshot.
+    snaps = [d for d in snapshots.iterdir() if d.is_dir()]
+    if not snaps:
+        return None
+    return max(snaps, key=lambda d: d.stat().st_mtime)
+
+
+def _repo_id_from_cache_folder(folder_name: str) -> str:
+    """`datasets--lerobot--pusht` -> `lerobot/pusht` for display."""
+    return folder_name.removeprefix("datasets--").replace("--", "/", 1)
+
+
 def _scan_recursive(base: Path, current: Path, found: list[dict], max_depth: int, depth: int) -> None:
     """Recursively scan for datasets up to max_depth."""
     if depth > max_depth:
         return
     try:
+        # HF hub cache repo folder (datasets--owner--name/snapshots/<commit>/).
+        # The dataset lives inside the resolved snapshot, deeper than max_depth,
+        # so handle it explicitly and report it under its clean repo_id.
+        if current.name.startswith("datasets--"):
+            snapshot = _resolve_hub_cache_snapshot(current)
+            if snapshot is not None and (snapshot / "meta" / "info.json").is_file():
+                try:
+                    info = json.loads((snapshot / "meta" / "info.json").read_text())
+                    found.append(
+                        {
+                            "name": _repo_id_from_cache_folder(current.name),
+                            "root": str(snapshot),
+                            "total_episodes": info.get("total_episodes", 0),
+                            "total_frames": info.get("total_frames", 0),
+                            "fps": info.get("fps", 0),
+                            "robot_type": info.get("robot_type") or "",
+                        }
+                    )
+                except Exception:
+                    logger.debug(f"Failed to read info.json in {snapshot}", exc_info=True)
+            return  # Don't recurse into the hub cache internals (blobs/refs).
+
         info_file = current / "meta" / "info.json"
         if info_file.is_file():
             # This directory is a dataset

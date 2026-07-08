@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from lerobot.policies.hvla.rlt.config import RLTConfig
+from lerobot.policies.rlt.config import RLTConfig
 
 
 def _build_mlp(

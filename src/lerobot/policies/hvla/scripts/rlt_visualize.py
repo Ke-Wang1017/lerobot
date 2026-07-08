@@ -60,8 +60,8 @@ def _label_categories(reward: np.ndarray, done: np.ndarray) -> np.ndarray:
 
 def _load_actor_critic(ckpt_dir: Path, z_rl_dim: int, state_dim: int, action_dim: int):
     """Load both saved networks. Caller resolves missing-file cases."""
-    from lerobot.policies.hvla.rlt.actor_critic import RLTActor, RLTCritic
-    from lerobot.policies.hvla.rlt.config import RLTConfig
+    from lerobot.policies.rlt.actor_critic import RLTActor, RLTCritic
+    from lerobot.policies.rlt.config import RLTConfig
 
     cfg = RLTConfig(rl_token_dim=z_rl_dim)
     actor = critic = None

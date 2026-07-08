@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from lerobot.policies.hvla.rlt.metrics import (
+from lerobot.policies.rlt.metrics import (
     EpisodeGroup,
     GradUpdateGroup,
     InferenceGroup,

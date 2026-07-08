@@ -11,8 +11,8 @@ import numpy as np
 import pytest
 import torch
 
-from lerobot.policies.hvla.rlt.intervention import InterventionRecorder
-from lerobot.policies.hvla.rlt.replay_buffer import ReplayBuffer
+from lerobot.policies.rlt.intervention import InterventionRecorder
+from lerobot.policies.rlt.replay_buffer import ReplayBuffer
 
 C = 5  # chunk_length used in tests
 A = 14  # action_dim
@@ -32,9 +32,10 @@ def joint_names():
     return [f"j{i}.pos" for i in range(STATE_DIM)]
 
 
-class _MockPolicy:
-    """Minimal policy with normalization stats. None means skip
-    normalization (mirrors the real policy when stats aren't loaded)."""
+class _MockAdapter:
+    """Minimal RLTPolicyAdapter stub exposing only the normalization the
+    recorder uses. None stats means skip normalization (mirrors the real
+    adapter when the policy's stats aren't loaded)."""
 
     def __init__(self, normalize=False):
         if normalize:
@@ -48,6 +49,16 @@ class _MockPolicy:
             self._state_std = None
             self._action_mean = None
             self._action_std = None
+
+    def normalize_state(self, state):
+        if self._state_mean is None:
+            return state
+        return (state - self._state_mean.to(state.device)) / self._state_std.to(state.device)
+
+    def normalize_action(self, action):
+        if self._action_mean is None:
+            return action
+        return (action - self._action_mean.to(action.device)) / self._action_std.to(action.device)
 
 
 @pytest.fixture
@@ -65,7 +76,7 @@ def replay(device):
 def _make_recorder(replay, device, joint_names, normalize=False):
     return InterventionRecorder(
         replay=replay,
-        policy=_MockPolicy(normalize=normalize),
+        adapter=_MockAdapter(normalize=normalize),
         device=device,
         chunk_length=C,
         joint_names=joint_names,
@@ -372,7 +383,7 @@ class TestLogSummary:
         for _ in range(3 * C):  # 3 windows → expected = 2 stored
             rec.on_frame(_human_action(), _z_rl(), _obs(joint_names))
         assert rec.chunks_stored == 2
-        with caplog.at_level("INFO", logger="lerobot.policies.hvla.rlt.intervention"):
+        with caplog.at_level("INFO", logger="lerobot.policies.rlt.intervention"):
             rec.log_summary()
         assert any("(expected 2)" in r.message for r in caplog.records), (
             "happy-path log should restate the expected count for confirmation"
@@ -393,7 +404,7 @@ class TestLogSummary:
         # — simulates "frames seen but storage path was broken".
         rec._frame_count = 3 * C  # expected = 2
         rec._chunks_stored = 0  # but nothing was stored
-        with caplog.at_level("WARNING", logger="lerobot.policies.hvla.rlt.intervention"):
+        with caplog.at_level("WARNING", logger="lerobot.policies.rlt.intervention"):
             rec.log_summary()
         assert any("Some intervention data was dropped" in r.message for r in caplog.records), (
             "drop-detection warning must fire on mismatch"
@@ -488,7 +499,7 @@ class TestFlushTerminal:
         for _ in range(C - 1):  # less than one full window
             rec.on_frame(_human_action(), _z_rl(), _obs(joint_names))
         before = len(replay)
-        with caplog.at_level("WARNING", logger="lerobot.policies.hvla.rlt.intervention"):
+        with caplog.at_level("WARNING", logger="lerobot.policies.rlt.intervention"):
             wrote = rec.flush_terminal(
                 reward=1.0,
                 current_z_rl=_z_rl(),

@@ -45,7 +45,6 @@ Teleoperator handover:
 from __future__ import annotations
 
 import contextlib
-import enum
 import logging
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -54,166 +53,19 @@ from typing import Any
 
 import numpy as np
 
-from lerobot.common.control_utils import (
-    follower_smooth_move_to,
-    teleop_smooth_move_to,
-    teleop_supports_feedback,
-)
 from lerobot.datasets import VideoEncodingManager
 from lerobot.datasets.utils import DEFAULT_VIDEO_FILE_SIZE_IN_MB
 from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.feature_utils import build_dataset_frame
-from lerobot.utils.keyboard_input import create_key_listener
-from lerobot.utils.pedal import start_pedal_listener
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import log_say
 
-from ..configs import DAggerKeyboardConfig, DAggerPedalConfig, DAggerStrategyConfig
+from ..configs import DAggerStrategyConfig
 from ..context import RolloutContext
-from .core import RolloutStrategy, estimate_max_episode_seconds, safe_push_to_hub, send_next_action
+from .core import estimate_max_episode_seconds, safe_push_to_hub, send_next_action
+from .intervention import DAggerPhase, InterventionStrategy
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# DAgger state machine
-# ---------------------------------------------------------------------------
-
-
-class DAggerPhase(enum.Enum):
-    """Observable phases of a DAgger episode."""
-
-    AUTONOMOUS = "autonomous"  # Policy driving
-    PAUSED = "paused"  # Engine paused, teleop aligned, awaiting input
-    CORRECTING = "correcting"  # Human driving via teleop, recording interventions
-
-
-# Valid (current_phase, event) -> next_phase
-_DAGGER_TRANSITIONS: dict[tuple[DAggerPhase, str], DAggerPhase] = {
-    (DAggerPhase.AUTONOMOUS, "pause_resume"): DAggerPhase.PAUSED,
-    (DAggerPhase.PAUSED, "pause_resume"): DAggerPhase.AUTONOMOUS,
-    (DAggerPhase.PAUSED, "correction"): DAggerPhase.CORRECTING,
-    (DAggerPhase.CORRECTING, "correction"): DAggerPhase.PAUSED,
-}
-
-
-class DAggerEvents:
-    """Thread-safe container for DAgger input device events.
-
-    The keyboard/pedal threads write transition requests; the main loop
-    consumes them.
-    """
-
-    def __init__(self) -> None:
-        self._lock = Lock()
-        self._phase = DAggerPhase.AUTONOMOUS
-        self._pending_transition: str | None = None
-
-        # Session-level flags
-        self.stop_recording = Event()
-        self.upload_requested = Event()
-
-    # -- Thread-safe phase access ------------------------------------------
-
-    @property
-    def phase(self) -> DAggerPhase:
-        """Current phase of the DAgger state machine."""
-        with self._lock:
-            return self._phase
-
-    @phase.setter
-    def phase(self, value: DAggerPhase) -> None:
-        with self._lock:
-            self._phase = value
-
-    def request_transition(self, event: str) -> None:
-        """Request a phase transition (called from keyboard/pedal threads).
-
-        Only enqueues the request if it corresponds to a valid transition
-        from the current phase, preventing impossible state changes.
-        """
-        with self._lock:
-            if (self._phase, event) in _DAGGER_TRANSITIONS:
-                self._pending_transition = event
-
-    def consume_transition(self) -> tuple[DAggerPhase, DAggerPhase] | None:
-        """Consume a pending transition (called from main loop)."""
-        with self._lock:
-            if self._pending_transition is None:
-                return None
-            key = (self._phase, self._pending_transition)
-            self._pending_transition = None
-            new_phase = _DAGGER_TRANSITIONS.get(key)
-            if new_phase is None:
-                return None
-            old_phase = self._phase
-            self._phase = new_phase
-            return old_phase, new_phase
-
-    def reset(self) -> None:
-        """Reset all transient state for a fresh session."""
-        with self._lock:
-            self._phase = DAggerPhase.AUTONOMOUS
-            self._pending_transition = None
-        self.upload_requested.clear()
-
-
-# ---------------------------------------------------------------------------
-# Input device handlers
-# ---------------------------------------------------------------------------
-
-
-def _init_dagger_keyboard(events: DAggerEvents, cfg: DAggerKeyboardConfig):
-    """Initialise a keyboard listener for DAgger's 3 controls.
-
-    Backend selection (pynput on X11 / trusted-macOS / Windows, a terminal reader on
-    Wayland / headless TTY) is delegated to :func:`create_key_listener`. Returns the
-    listener (exposing ``stop()``) or ``None`` when no keyboard backend is usable.
-    """
-    # Map config key names to DAgger event names.
-    key_to_event = {
-        cfg.pause_resume: "pause_resume",
-        cfg.correction: "correction",
-    }
-
-    def dispatch(name: str) -> None:
-        """Apply a resolved key name to the DAgger events."""
-        if name == "esc":
-            logger.info("Stop recording...")
-            events.stop_recording.set()
-            return
-        if name in key_to_event:
-            events.request_transition(key_to_event[name])
-        if name == cfg.upload:
-            events.upload_requested.set()
-
-    return create_key_listener(
-        dispatch,
-        controls_help=(
-            f"pause_resume='{cfg.pause_resume}', correction='{cfg.correction}', "
-            f"upload='{cfg.upload}', ESC=stop"
-        ),
-    )
-
-
-def _init_dagger_pedal(events: DAggerEvents, cfg: DAggerPedalConfig):
-    """Initialise foot pedal listener with DAgger 3-pedal controls.
-
-    Returns the pedal listener thread (or ``None`` if evdev is unavailable).
-    """
-    code_to_event = {
-        cfg.pause_resume: "pause_resume",
-        cfg.correction: "correction",
-    }
-
-    def on_press(code: str) -> None:
-        if code in code_to_event:
-            events.request_transition(code_to_event[code])
-        if code == cfg.upload:
-            events.upload_requested.set()
-
-    logger.info("Initializing DAgger foot pedal listener (device=%s)", cfg.device_path)
-    return start_pedal_listener(on_press, device_path=cfg.device_path)
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +73,7 @@ def _init_dagger_pedal(events: DAggerEvents, cfg: DAggerPedalConfig):
 # ---------------------------------------------------------------------------
 
 
-class DAggerStrategy(RolloutStrategy):
+class DAggerStrategy(InterventionStrategy):
     """Human-in-the-Loop data collection with intervention tagging.
 
     State machine::
@@ -234,15 +86,18 @@ class DAggerStrategy(RolloutStrategy):
             time-based episode rotation.  Intervention frames tagged True.
         ``record_autonomous=False``: Only correction windows recorded.
             Each correction = one episode.  Upload on demand via key3.
+
+    The state machine, input-device wiring, and smooth teleop handover are
+    provided by :class:`InterventionStrategy`; DAgger adds only the two
+    dataset-recording control loops. It overrides none of the training hooks —
+    it is a pure recording strategy.
     """
 
     config: DAggerStrategyConfig
 
     def __init__(self, config: DAggerStrategyConfig):
+        # Base sets up self._listener / self._pedal_thread / self._events.
         super().__init__(config)
-        self._listener = None
-        self._pedal_thread = None
-        self._events = DAggerEvents()
         self._push_executor: ThreadPoolExecutor | None = None
         self._pending_push: Future | None = None
         self._needs_push = Event()
@@ -257,10 +112,7 @@ class DAggerStrategy(RolloutStrategy):
             ctx.data.dataset_features, ctx.runtime.cfg.fps, target_size_mb=target_mb
         )
 
-        if self.config.input_device == "keyboard":
-            self._listener = _init_dagger_keyboard(self._events, self.config.keyboard)
-        else:
-            self._pedal_thread = _init_dagger_pedal(self._events, self.config.pedal)
+        self._setup_input_device(self.config.input_device, self.config.keyboard, self.config.pedal)
 
         record_mode = "all frames (sentry-like)" if self.config.record_autonomous else "corrections only"
         logger.info(
@@ -284,9 +136,7 @@ class DAggerStrategy(RolloutStrategy):
         logger.info("Stopping DAgger recording")
         log_say("Stopping DAgger recording", play_sounds)
 
-        if self._listener is not None:
-            logger.info("Stopping keyboard listener")
-            self._listener.stop()
+        self._teardown_input_device()
 
         # Flush any queued/running push cleanly
         if self._push_executor is not None:
@@ -622,77 +472,8 @@ class DAggerStrategy(RolloutStrategy):
     # ------------------------------------------------------------------
     # State-machine transition side-effects
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _apply_transition(
-        old_phase: DAggerPhase,
-        new_phase: DAggerPhase,
-        engine,
-        interpolator,
-        ctx: RolloutContext,
-        prev_action: dict | None,
-    ) -> None:
-        """Execute side-effects for a validated phase transition, including smooth handovers.
-
-        AUTONOMOUS -> PAUSED (actuated teleop):
-            Pause the engine, then drive the leader arm to the follower's last
-            commanded position so the operator takes over without a jerk.
-
-        PAUSED -> CORRECTING (non-actuated teleop):
-            Slide the follower to the teleop's current pose so the robot meets
-            the operator's hand rather than jumping to it on the first frame.
-
-        CORRECTING -> PAUSED (actuated teleop):
-            Re-enable torque to hold position after correction.
-            This will be potentially useful if cancelling the correction recording
-
-        PAUSED -> AUTONOMOUS:
-            Reset and resume the inference engine.
-        """
-        teleop = ctx.hardware.teleop
-        robot = ctx.hardware.robot_wrapper
-
-        logger.info("Phase transition: %s -> %s", old_phase.value, new_phase.value)
-        if old_phase == DAggerPhase.AUTONOMOUS and new_phase == DAggerPhase.PAUSED:
-            logger.info("Pausing engine - robot holds position")
-            engine.pause()
-
-            if teleop_supports_feedback(teleop) and prev_action is not None:
-                # TODO(Maxime): prev_action is in robot action key space (output of robot_action_processor).
-                # send_feedback expects teleop feedback key space. For homogeneous setups (e.g. SO-101
-                # leader + SO-101 follower) the keys are identical so this works. If the processor pipeline
-                # does non-trivial key renaming (e.g. a rename_map on action keys), the interpolation in
-                # teleop_smooth_move_to silently no-ops and the arm doesn't move.
-                logger.info("Smooth handover: moving leader arm to follower position")
-                teleop_smooth_move_to(teleop, prev_action)
-
-        elif old_phase == DAggerPhase.PAUSED and new_phase == DAggerPhase.CORRECTING:
-            logger.info("Entering correction mode - human teleop control")
-            if not teleop_supports_feedback(teleop) and prev_action is not None:
-                logger.info("Smooth handover: sliding follower to teleop position")
-                obs = robot.get_observation()
-                teleop_action = teleop.get_action()
-                processed = ctx.processors.teleop_action_processor((teleop_action, obs))
-                target = ctx.processors.robot_action_processor((processed, obs))
-                follower_smooth_move_to(robot, prev_action, target)
-
-            # unlock the teleop for human control
-            if teleop_supports_feedback(teleop):
-                teleop.disable_torque()
-
-        elif old_phase == DAggerPhase.CORRECTING and new_phase == DAggerPhase.PAUSED:
-            if teleop_supports_feedback(teleop):
-                teleop.enable_torque()
-
-        elif new_phase == DAggerPhase.AUTONOMOUS:
-            logger.info("Resuming autonomous mode - resetting engine and interpolator")
-            interpolator.reset()
-            engine.reset()
-            engine.resume()
-
-            # release teleop before resuming the policy
-            if teleop_supports_feedback(teleop):
-                teleop.disable_torque()
+    # ``_apply_transition`` (smooth teleop handover) is inherited unchanged
+    # from :class:`InterventionStrategy`.
 
     # ------------------------------------------------------------------
     # Background push (shared by both modes)

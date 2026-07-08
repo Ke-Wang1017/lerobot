@@ -37,7 +37,7 @@ Compresses S1's internal representations into a bottleneck. Run once per S1
 checkpoint. See [`train_token.py`](train_token.py) for full options.
 
 ```bash
-python -m lerobot.policies.hvla.rlt.train_token \
+python -m lerobot.policies.rlt.train_token \
     --s1-checkpoint outputs/flow_s1_no_s2_v1/checkpoints/last/pretrained_model \
     --dataset-repo-id thewisp/cylinder_ring_assembly \
     --output-dir outputs/rlt_token \

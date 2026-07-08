@@ -664,7 +664,7 @@ class TestGetRltConfig:
         """Before any RLT session starts, endpoint returns RLTConfig defaults.
         Without this the GUI would crash trying to read undefined state."""
         from lerobot.gui.api.run import get_rlt_config
-        from lerobot.policies.hvla.rlt.config import RLTConfig
+        from lerobot.policies.rlt.config import RLTConfig
 
         cfg = asyncio.run(get_rlt_config())
         defaults = RLTConfig()
@@ -702,7 +702,7 @@ class TestGetRltConfig:
         """Old override files may predate some keys. Missing keys fall back
         to config defaults so the GUI always has a value to show."""
         from lerobot.gui.api.run import get_rlt_config
-        from lerobot.policies.hvla.rlt.config import RLTConfig
+        from lerobot.policies.rlt.config import RLTConfig
 
         (tmp_path / "rlt_overrides.json").write_text(json.dumps({"beta": 0.3}))
         reset_active._active_config = {"rlt_output_dir": str(tmp_path)}
@@ -714,7 +714,7 @@ class TestGetRltConfig:
     def test_missing_file_returns_defaults(self, reset_active, tmp_path):
         """Fresh RLT session hasn't written the file yet — don't 404."""
         from lerobot.gui.api.run import get_rlt_config
-        from lerobot.policies.hvla.rlt.config import RLTConfig
+        from lerobot.policies.rlt.config import RLTConfig
 
         reset_active._active_config = {"rlt_output_dir": str(tmp_path)}
         cfg = asyncio.run(get_rlt_config())
@@ -723,7 +723,7 @@ class TestGetRltConfig:
     def test_malformed_file_returns_defaults(self, reset_active, tmp_path):
         """Never break the GUI over a corrupt override file."""
         from lerobot.gui.api.run import get_rlt_config
-        from lerobot.policies.hvla.rlt.config import RLTConfig
+        from lerobot.policies.rlt.config import RLTConfig
 
         (tmp_path / "rlt_overrides.json").write_text("not json {{{")
         reset_active._active_config = {"rlt_output_dir": str(tmp_path)}

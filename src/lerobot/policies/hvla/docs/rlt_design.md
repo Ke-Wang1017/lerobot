@@ -196,10 +196,10 @@ The encoder is losing ~half the information. Likely causes:
 
 ## Files to create/modify (on new branch):
 
-1. `src/lerobot/policies/hvla/rlt/replay_buffer.py` — add lock
-2. `src/lerobot/policies/hvla/rlt/actor_critic.py` — copy with BC L2 sum fix, zero-init
-3. `src/lerobot/policies/hvla/rlt/config.py` — copy with sigma=0.01, warmup=10
-4. `src/lerobot/policies/hvla/rlt/metrics.py` — copy + add Q values, throughput
+1. `src/lerobot/policies/rlt/replay_buffer.py` — add lock
+2. `src/lerobot/policies/rlt/actor_critic.py` — copy with BC L2 sum fix, zero-init
+3. `src/lerobot/policies/rlt/config.py` — copy with sigma=0.01, warmup=10
+4. `src/lerobot/policies/rlt/metrics.py` — copy + add Q values, throughput
 5. `src/lerobot/policies/hvla/s1_inference.py` — NEW integration: actor + transitions only in RL mode
 6. `src/lerobot/policies/hvla/s1_process.py` — NEW integration: BASE/RL/INTERVENTION mode, intervention chunks, key bindings
 7. `src/lerobot/policies/hvla/launch.py` — RLT flags

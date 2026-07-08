@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from lerobot.policies.hvla.rlt.config import RLTConfig
+from lerobot.policies.rlt.config import RLTConfig
 
 # Fields that determine encoder/decoder tensor shapes. Saved to
 # ``config.json`` alongside each trained checkpoint so a loader can
@@ -70,7 +70,7 @@ def load_rlt_token_config(
             f"No architecture manifest at {config_path}. Pre-manifest "
             f"checkpoints (the deprecated 2L d=768 family) are no longer "
             f"loadable. Retrain the token encoder with the canonical 4L "
-            f"d=2048 recipe (`python -m lerobot.policies.hvla.rlt."
+            f"d=2048 recipe (`python -m lerobot.policies.rlt."
             f"train_token --encoder-layers 4 --decoder-layers 4 "
             f"--rl-token-dim 2048 ...`) or write a config.json with the "
             f"saved architecture's shape fields."

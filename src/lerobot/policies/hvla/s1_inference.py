@@ -14,7 +14,7 @@ import time
 import numpy as np
 import torch
 
-from lerobot.policies.hvla.rlt.episode import TerminalKind
+from lerobot.policies.rlt.episode import TerminalKind
 from lerobot.utils.latency import LatencySession
 
 logger = logging.getLogger(__name__)
@@ -413,7 +413,7 @@ class InferenceThread:
         # (so baseline / actor-off dumps also get a unique step per inference).
         actor_delta = (actor_norm - actor_ref).abs().mean().item()
 
-        from lerobot.policies.hvla.rlt.metrics import get_metrics, save_metrics_to_file
+        from lerobot.policies.rlt.metrics import get_metrics, save_metrics_to_file
 
         is_deploy = self._rlt_state.get("deploy", False)
         mode = "DEPLOY" if is_deploy else ("WARMUP" if is_warmup else "RL")
@@ -708,7 +708,7 @@ class InferenceThread:
             )
 
         # Update metrics with Q values
-        from lerobot.policies.hvla.rlt.metrics import get_metrics
+        from lerobot.policies.rlt.metrics import get_metrics
 
         # Update rate: actor updates since last call / elapsed time.
         # 0 on first call or after a long pause (intervention/reset).

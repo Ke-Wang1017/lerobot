@@ -17,7 +17,7 @@ import time
 
 import pytest
 
-from lerobot.policies.hvla.rlt.episode import EpisodeLifecycle, TerminalKind
+from lerobot.policies.rlt.episode import EpisodeLifecycle, TerminalKind
 
 # ============================================================================
 # Initial state and lifecycle transitions
@@ -281,7 +281,7 @@ class TestTerminalSignalConsume:
         listener) is benign — no log noise."""
         lc = EpisodeLifecycle()
         lc.begin(0)
-        with caplog.at_level("WARNING", logger="lerobot.policies.hvla.rlt.episode"):
+        with caplog.at_level("WARNING", logger="lerobot.policies.rlt.episode"):
             lc.signal_terminal(TerminalKind.SUCCESS)
             lc.signal_terminal(TerminalKind.SUCCESS)
             lc.signal_terminal(TerminalKind.SUCCESS)
@@ -298,7 +298,7 @@ class TestTerminalSignalConsume:
         lc = EpisodeLifecycle()
         lc.begin(0)
         lc.signal_terminal(TerminalKind.SUCCESS)
-        with caplog.at_level("WARNING", logger="lerobot.policies.hvla.rlt.episode"):
+        with caplog.at_level("WARNING", logger="lerobot.policies.rlt.episode"):
             lc.signal_terminal(TerminalKind.ABORT)
         warnings = [r for r in caplog.records if r.levelname == "WARNING"]
         assert len(warnings) == 1, f"Expected exactly 1 conflict warning, got {len(warnings)}"
@@ -316,7 +316,7 @@ class TestTerminalSignalConsume:
         lc = EpisodeLifecycle()
         lc.begin(0)
         lc.signal_terminal(TerminalKind.SUCCESS)
-        with caplog.at_level("WARNING", logger="lerobot.policies.hvla.rlt.episode"):
+        with caplog.at_level("WARNING", logger="lerobot.policies.rlt.episode"):
             lc.signal_terminal(TerminalKind.ABORT)
             lc.signal_terminal(TerminalKind.ABORT)
             lc.signal_terminal(TerminalKind.ABORT)

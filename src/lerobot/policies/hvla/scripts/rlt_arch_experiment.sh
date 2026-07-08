@@ -89,7 +89,7 @@ train_args=(
 if [ -n "$RL_TOKEN_DIM" ]; then
     train_args+=(--rl-token-dim "$RL_TOKEN_DIM")
 fi
-nohup python -u -m lerobot.policies.hvla.rlt.train_token \
+nohup python -u -m lerobot.policies.rlt.train_token \
     "${train_args[@]}" \
     > "$TRAIN_LOG" 2>&1 &
 TRAIN_PID=$!

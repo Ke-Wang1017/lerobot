@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+from pathlib import Path
 from typing import Any
 
 from lerobot.gui.training.runs import Run, RunPaths
@@ -127,6 +128,12 @@ CONTAINER_OUTPUT_SUBDIR = "output"  # /runs/output — lerobot-train writes here
 # even reaches the mount (GPU smoke bug #5). "/" is root-owned 755 —
 # traversable by every uid.
 CONTAINER_HF_CACHE = "/hf-cache"
+# A local checkpoint chosen as the finetune base is bind-mounted here (read
+# only) and ``--policy.pretrained_path`` is rewritten to this path, so the
+# base weights are reachable inside the container regardless of where they
+# live on the host (GUI runs dir, ./outputs, HF cache, …). A Hub repo id is
+# left untouched — the container resolves it via the mounted HF cache.
+CONTAINER_FINETUNE_BASE = "/finetune-base"
 
 # ── Host-identity placeholders ───────────────────────────────────────────────
 #
@@ -272,12 +279,16 @@ _DEFAULT_LOG_FREQ = 200
 _TARGET_LOG_POINTS = 20
 
 
-def _docker_argv_base(image: str, paths: RunPaths) -> list[str]:
+def _docker_argv_base(image: str, paths: RunPaths, extra_mounts: list[str] | None = None) -> list[str]:
     """The docker-run prefix shared by every recipe: GPU passthrough,
     host-identity placeholders, the arbitrary-uid env overrides, and the
     two bind mounts. One seam so the GPU-smoke lessons can't drift apart
     between recipe builders (they were patched in parallel six times
     before this was extracted).
+
+    ``extra_mounts`` (already ``["-v", "src:dst:opts", ...]`` tokens) are
+    spliced in just before the image — used to mount a local finetune-base
+    checkpoint into the container.
 
     Post: ends with the image — callers append their entrypoint + args.
     """
@@ -334,6 +345,7 @@ def _docker_argv_base(image: str, paths: RunPaths) -> list[str]:
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
         "-v",
         f"{paths.root}:{CONTAINER_RUNS_MOUNT}",
+        *(extra_mounts or []),
         image,
     ]
 
@@ -343,10 +355,27 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
 
     # Translate Run.args → lerobot-train --key=value flags
     train_args: list[str] = []
+    extra_mounts: list[str] = []
     seen: set[str] = set()
     # User-supplied flags first
     for k, v in run.args.items():
         if k.startswith("__"):
+            continue
+        if k == "policy.pretrained_path":
+            # Finetune base. A local checkpoint dir isn't under either bind
+            # mount in the general case, so mount it read-only and rewrite the
+            # flag to the in-container path. A Hub repo id (not an existing
+            # local dir) passes through — resolved via the HF cache mount.
+            base = str(v).strip()
+            if not base:
+                continue
+            host_path = Path(base).expanduser()
+            if host_path.is_dir():
+                extra_mounts.extend(["-v", f"{host_path}:{CONTAINER_FINETUNE_BASE}:ro"])
+                train_args.append(f"--policy.pretrained_path={CONTAINER_FINETUNE_BASE}")
+            else:
+                train_args.append(f"--policy.pretrained_path={base}")
+            seen.add(k)
             continue
         if k in _FORCED_FLAGS:
             # User explicitly set a flag we'd otherwise force — silently
@@ -376,7 +405,7 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
             train_args.append(f"--log_freq={max(1, min(_DEFAULT_LOG_FREQ, steps // _TARGET_LOG_POINTS))}")
 
     docker_argv = [
-        *_docker_argv_base(image, paths),
+        *_docker_argv_base(image, paths, extra_mounts),
         "lerobot-train",
         *train_args,
     ]

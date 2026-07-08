@@ -189,6 +189,49 @@ class DAggerStrategyConfig(RolloutStrategyConfig):
             raise ValueError(f"DAgger input_device must be 'keyboard' or 'pedal', got '{self.input_device}'")
 
 
+@RolloutStrategyConfig.register_subclass("rlt")
+@dataclass
+class RLTStrategyConfig(RolloutStrategyConfig):
+    """Online RL fine-tuning (RLT — "RL Token") of a frozen base policy.
+
+    Shares the human-in-the-loop intervention mechanism with DAgger (autonomous
+    policy execution + teleop takeover), but routes data into an RL replay
+    buffer and trains a lightweight TD3 actor-critic on top of the frozen
+    policy, instead of only recording a supervised dataset. The RL machinery
+    itself lives in ``lerobot.policies.rlt`` and reaches the base policy through
+    an ``RLTPolicyAdapter``, so this strategy is policy-agnostic.
+
+    Input controls reuse the DAgger keyboard/pedal bindings (pause_resume /
+    correction toggle the intervention state machine); RLT additionally reads
+    terminal-outcome hotkeys (success / abort / re-record) handled in the
+    strategy loop.
+    """
+
+    # RL-token encoder checkpoint (Phase 1 output). Required to build the
+    # actor's input; without it the actor dim is undefined.
+    rl_token_checkpoint: str | None = None
+    # Existing RLT run dir to resume actor/critic/replay/episode from.
+    rlt_checkpoint: str | None = None
+    # Inference only — no critic, replay, gradient updates, or exploration.
+    deploy: bool = False
+    # RL action-chunk length C (frames the actor refines).
+    rl_chunk_length: int = 10
+    # Output dir for checkpoints, metrics.json, rlt_overrides.json.
+    output_dir: str = "outputs/rlt_online"
+    # Start with the actor engaged (vs. VLA-only until the operator enables it).
+    start_engaged: bool = True
+    # Sample exploration noise once per chunk and broadcast (smoother joints).
+    shared_noise_per_chunk: bool = True
+
+    input_device: str = "keyboard"
+    keyboard: DAggerKeyboardConfig = field(default_factory=DAggerKeyboardConfig)
+    pedal: DAggerPedalConfig = field(default_factory=DAggerPedalConfig)
+
+    def __post_init__(self):
+        if self.input_device not in ("keyboard", "pedal"):
+            raise ValueError(f"RLT input_device must be 'keyboard' or 'pedal', got '{self.input_device}'")
+
+
 # ---------------------------------------------------------------------------
 # Top-level rollout config
 # ---------------------------------------------------------------------------
@@ -256,8 +299,9 @@ class RolloutConfig:
     def __post_init__(self):
         """Validate config invariants and load the policy config from ``--policy.path``."""
         # --- Strategy-specific validation ---
-        if isinstance(self.strategy, DAggerStrategyConfig) and self.teleop is None:
-            raise ValueError("DAgger strategy requires --teleop.type to be set")
+        # Human-in-the-loop strategies need a teleoperator for the intervention half.
+        if isinstance(self.strategy, (DAggerStrategyConfig, RLTStrategyConfig)) and self.teleop is None:
+            raise ValueError(f"{self.strategy.type} strategy requires --teleop.type to be set")
 
         # TODO(Steven): DAgger shouldn't require a dataset (user may want to just rollout+intervene without recording), but for now we require it to simplify the implementation.
         needs_dataset = isinstance(

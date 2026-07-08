@@ -463,7 +463,13 @@ ignore = [
 "src/lerobot/policies/wall_x/**" = ["N801", "N812", "SIM102", "SIM108", "SIM210", "SIM211", "B006", "B007", "SIM118"] # Supprese these as they are coming from original Qwen2_5_vl code TODO(pepijn): refactor original
 # HVLA / RLT / our research code uses ML-convention names: matrix vars X/Q/K/V/B/C, `import torch.nn.functional as F`, etc. Ruff's pep8-naming rules flag these as violations; consistent with how upstream handles wall_x, scope the same naming-rule allowlist to fork-only ML code. Also allow E702/E741 in research scripts which routinely chain plot setup statements (`ax.set_xlabel(...); ax.set_ylabel(...)`) and use `l` for list-comp temporaries. SIM102/SIM108 disabled because nested-if and if-else carry expository comments that ternary forms can't.
 "src/lerobot/policies/hvla/**" = ["N801", "N802", "N803", "N806", "N812", "E702", "E741", "SIM102", "SIM108"]
+# RLT extracted out of hvla into its own policy-agnostic package; same ML-naming allowlist.
+"src/lerobot/policies/rlt/**" = ["N801", "N802", "N803", "N806", "N812", "E702", "E741", "SIM102", "SIM108"]
+# RLT rollout strategy ports the RL numerics (chunk length C, action dim A) from
+# policies/rlt with the same ML-convention single-letter names.
+"src/lerobot/rollout/strategies/rlt.py" = ["N806"]
 "tests/hvla/**" = ["N802", "N803", "N806", "N812", "E402", "E741", "B017"]
+"tests/rlt/**" = ["N802", "N803", "N806", "N812", "E402", "E741", "B017"]
 # Kinematics code uses math-convention matrix names (SE(3) `T`, rotation `R`).
 "src/lerobot/model/pink_kinematics.py" = ["N806"]
 "tests/model/test_pink_kinematics.py" = ["N806", "N817"]

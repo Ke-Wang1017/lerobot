@@ -178,7 +178,7 @@ def get_rlt_metrics() -> dict[str, Any]:
     from lerobot.gui.api import run as run_mod
 
     try:
-        from lerobot.policies.hvla.rlt.metrics import load_metrics_from_file
+        from lerobot.policies.rlt.metrics import load_metrics_from_file
 
         path = None
         if run_mod._active_config and run_mod._active_config.get("rlt_output_dir"):

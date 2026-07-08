@@ -16,7 +16,7 @@ import torch
 import torchvision.transforms.functional as TF
 
 from lerobot.policies.hvla.ipc import SharedImageBuffer, SharedLatentCache
-from lerobot.policies.hvla.rlt.episode import EpisodeLifecycle, TerminalKind
+from lerobot.policies.rlt.episode import EpisodeLifecycle, TerminalKind
 from lerobot.types import ActionChunk
 
 logger = logging.getLogger(__name__)
@@ -617,8 +617,6 @@ def run_s1(
     import lerobot.configs.parser  # noqa: F401
     import lerobot.robots as _lr_robots
     import lerobot.teleoperators as _lr_teleops
-    from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
-    from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
     from lerobot.policies.hvla.s1.protocol import S2_LATENT_KEY
     from lerobot.robots import make_robot_from_config
     from lerobot.robots.config import RobotConfig
@@ -822,10 +820,10 @@ def run_s1(
     rlt_state = None
 
     if rlt_mode:
-        from lerobot.policies.hvla.rlt.actor_critic import TD3Agent
-        from lerobot.policies.hvla.rlt.config import RLTConfig
-        from lerobot.policies.hvla.rlt.replay_buffer import TransactionalReplayBuffer
-        from lerobot.policies.hvla.rlt.token import RLTokenEncoder, load_rlt_token_config
+        from lerobot.policies.rlt.actor_critic import TD3Agent
+        from lerobot.policies.rlt.config import RLTConfig
+        from lerobot.policies.rlt.replay_buffer import TransactionalReplayBuffer
+        from lerobot.policies.rlt.token import RLTokenEncoder, load_rlt_token_config
 
         rlt_config = RLTConfig(
             rl_token_dim=policy.config.hidden_dim,
@@ -949,7 +947,7 @@ def run_s1(
         logger.info("RLT: Logging to %s", rlt_log_file)
 
         # Metrics file for GUI dashboard
-        from lerobot.policies.hvla.rlt.metrics import set_metrics_path
+        from lerobot.policies.rlt.metrics import set_metrics_path
 
         set_metrics_path(str(rlt_state["output_dir"] / "metrics.json"))
 
@@ -1033,7 +1031,7 @@ def run_s1(
             metrics_path = str(rlt_state["output_dir"] / "metrics.json")
             if os.path.exists(metrics_path):
                 try:
-                    from lerobot.policies.hvla.rlt.metrics import get_metrics
+                    from lerobot.policies.rlt.metrics import get_metrics
 
                     with open(metrics_path) as f:
                         saved = json.load(f)
@@ -1147,11 +1145,12 @@ def run_s1(
     # human-action → replay-buffer pipeline and raises on the first frame
     # where z_rl can't be sourced from the inference thread.
     if rlt_mode and rlt_replay is not None:
-        from lerobot.policies.hvla.rlt.intervention import InterventionRecorder
+        from lerobot.policies.rlt.intervention import InterventionRecorder
+        from lerobot.policies.hvla.rlt_adapter import HVLAS1Adapter
 
         rlt_recorder = InterventionRecorder(
             replay=rlt_replay,
-            policy=policy,
+            adapter=HVLAS1Adapter(policy),
             device=device,
             chunk_length=rl_chunk_length,
             joint_names=joint_names,
@@ -2180,7 +2179,7 @@ def run_s1(
                         np.mean(recent) * 100 if recent else 0,
                         ep_duration,
                     )
-                    from lerobot.policies.hvla.rlt.metrics import get_metrics, save_metrics_to_file
+                    from lerobot.policies.rlt.metrics import get_metrics, save_metrics_to_file
 
                     get_metrics().record_episode(
                         rlt_state["episode"],
@@ -2335,7 +2334,7 @@ def run_s1(
                             save_dir / "training_state.pt",
                         )
                         rlt_replay.save(str(save_dir / "replay_buffer.pt"))
-                        from lerobot.policies.hvla.rlt.metrics import save_metrics_to_file
+                        from lerobot.policies.rlt.metrics import save_metrics_to_file
 
                         save_metrics_to_file()
                         logger.info("RLT: Final checkpoint → %s", save_dir)

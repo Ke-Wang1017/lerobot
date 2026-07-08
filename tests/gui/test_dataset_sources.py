@@ -198,6 +198,61 @@ class TestScanSource:
         assert len(result) == 1
         assert result[0]["robot_type"] == ""
 
+    def _make_hub_cache_dataset(
+        self, cache_root: Path, repo_id: str, commit: str = "abc123", **info_overrides
+    ) -> Path:
+        """Create a dataset in the HF hub cache layout that LeRobotDataset(repo_id) uses.
+
+        datasets--owner--name/snapshots/<commit>/meta/info.json, with refs/main
+        pointing at the commit.
+        """
+        repo_dir = cache_root / "hub" / f"datasets--{repo_id.replace('/', '--')}"
+        snapshot = repo_dir / "snapshots" / commit
+        self._make_dataset(snapshot.parent, commit, **info_overrides)
+        refs = repo_dir / "refs"
+        refs.mkdir(parents=True)
+        (refs / "main").write_text(commit)
+        return snapshot
+
+    def test_finds_hub_cache_dataset(self, tmp_path):
+        """Datasets downloaded via LeRobotDataset(repo_id) land in the HF hub
+        cache (datasets--owner--name/snapshots/<commit>/), deeper than max_depth
+        and under a mangled folder name — the scan must still surface them."""
+        self._make_hub_cache_dataset(
+            tmp_path, "lerobot/aloha_sim_transfer_cube_human", total_episodes=50, fps=50
+        )
+        result = _scan_source(str(tmp_path))
+        assert len(result) == 1
+        ds = result[0]
+        assert ds["name"] == "lerobot/aloha_sim_transfer_cube_human"
+        assert ds["total_episodes"] == 50
+        assert ds["fps"] == 50
+        assert ds["root"].endswith("snapshots/abc123")
+
+    def test_hub_cache_resolves_refs_main(self, tmp_path):
+        """When multiple snapshots exist, the one refs/main points at wins."""
+        self._make_hub_cache_dataset(tmp_path, "lerobot/pusht", commit="oldsnap", total_episodes=1)
+        # Add a second snapshot and point refs/main at it.
+        repo_dir = tmp_path / "hub" / "datasets--lerobot--pusht"
+        self._make_dataset(repo_dir / "snapshots", "newsnap", total_episodes=2)
+        (repo_dir / "refs" / "main").write_text("newsnap")
+        result = _scan_source(str(tmp_path))
+        assert len(result) == 1
+        assert result[0]["total_episodes"] == 2
+        assert result[0]["root"].endswith("snapshots/newsnap")
+
+    def test_hub_cache_falls_back_to_newest_without_refs(self, tmp_path):
+        """No refs/main -> pick the most recently modified snapshot, don't crash."""
+        self._make_hub_cache_dataset(tmp_path, "lerobot/pusht", total_episodes=7)
+        # Remove refs so the fallback path is exercised.
+        import shutil
+
+        shutil.rmtree(tmp_path / "hub" / "datasets--lerobot--pusht" / "refs")
+        result = _scan_source(str(tmp_path))
+        assert len(result) == 1
+        assert result[0]["name"] == "lerobot/pusht"
+        assert result[0]["total_episodes"] == 7
+
     def test_handles_missing_robot_type(self, tmp_path):
         """info.json without robot_type key."""
         ds_dir = tmp_path / "no_robot"
