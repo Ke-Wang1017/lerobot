@@ -14,6 +14,7 @@ Endpoints, all under ``/api/training``:
 - ``POST /runs``                — start a new run
 - ``GET /runs/{run_id}``        — snapshot for one run (state, progress, checkpoints, log tail)
 - ``POST /runs/{run_id}/stop``  — user-initiated stop
+- ``GET|PUT|DELETE /wandb/connection`` — server-held Weights & Biases API key
 
 The router is constructed lazily — the orchestrator + host registry are
 injected via a module-level state object so server.py can wire them at startup
@@ -48,6 +49,11 @@ from lerobot.gui.training.orchestrator import (
 from lerobot.gui.training.probe import probe_ssh
 from lerobot.gui.training.recipes import HVLA_FLOW_S1_FIELD_TO_FLAG, HVLA_FLOW_S1_RECIPE
 from lerobot.gui.training.runs import RUNS_DIR, RunRegistry
+from lerobot.gui.training.wandb_credentials import (
+    WANDB_AUTHORIZE_URL,
+    resolve_api_key,
+    wandb_enabled,
+)
 
 router = APIRouter(prefix="/api/training", tags=["training"])
 
@@ -403,7 +409,21 @@ def start_run(body: StartRunBody) -> RunDTO:
     Ephemeral (cloud) hosts authenticate via the server-held Nebius
     service-account connection (see the ``/nebius/connection`` endpoints);
     no per-request credential is passed.
+
+    Returns 400 if the run asks for W&B tracking with no key resolvable. The
+    key itself is never part of the request — the orchestrator resolves it at
+    launch (see ``wandb_credentials.py``), so a rejected run fails here, in
+    the form, rather than 30 seconds into a container that can't authenticate.
     """
+    if wandb_enabled(body.args) and resolve_api_key()[0] is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Weights & Biases tracking is enabled but no API key is configured. "
+                f"Paste a key in the training form (get one at {WANDB_AUTHORIZE_URL}), "
+                "or run `wandb login` on the server."
+            ),
+        )
     orch, _ = get_state()
     try:
         run = orch.start(
@@ -663,6 +683,105 @@ def discover_nebius_subnets(body: NebiusDiscoverBody) -> list[NebiusSubnetDTO]:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp)  # safe-destruct: our own mkstemp temp key file
     return [NebiusSubnetDTO(id=s["id"], name=s["name"]) for s in subnets]
+
+
+# ── Weights & Biases connection ───────────────────────────────────────────────
+#
+# The connection is server-held and shared by every run, like the Nebius one.
+# The API never returns the key — only a masked tail, its source, and (when we
+# verified a pasted key) the entity it belongs to.
+
+
+class WandbConnectionDTO(BaseModel):
+    configured: bool
+    # "stored" | "env" | "netrc" | None — where the key came from. The UI says
+    # "using the key from your environment" rather than pretending the user
+    # connected through the GUI.
+    source: str | None = None
+    masked_key: str | None = None
+    entity: str | None = None
+    # Set when a pasted key was saved but couldn't be verified (offline, or a
+    # self-hosted deployment). The key still works if it's right — the UI says so.
+    warning: str | None = None
+
+
+class WandbConnectionBody(BaseModel):
+    api_key: str = Field(min_length=1)
+
+
+def _wandb_dto(status, warning: str | None = None) -> WandbConnectionDTO:
+    return WandbConnectionDTO(
+        configured=status.configured,
+        source=status.source,
+        masked_key=status.masked_key,
+        entity=status.entity,
+        warning=warning,
+    )
+
+
+@router.get("/wandb/connection", response_model=WandbConnectionDTO)
+def get_wandb_connection() -> WandbConnectionDTO:
+    """Non-secret status of the W&B connection, across all three key sources.
+
+    Deliberately does no network call: the training form reads this on every
+    open, and a slow or unreachable wandb.ai must not stall it.
+    """
+    from lerobot.gui.training.wandb_credentials import WandbConnectionStore
+
+    return _wandb_dto(WandbConnectionStore().status())
+
+
+@router.put("/wandb/connection", response_model=WandbConnectionDTO)
+def set_wandb_connection(body: WandbConnectionBody) -> WandbConnectionDTO:
+    """Store (or replace) the pasted W&B API key, written ``0600``.
+
+    Verifies the key against wandb.ai first, so a typo is caught here rather
+    than at the first training step. An unreachable wandb.ai is not a typo:
+    the key is stored anyway and the response carries a ``warning``.
+    Returns 400 on a malformed key or one wandb.ai actively rejects.
+    """
+    from lerobot.gui.training.wandb_credentials import (
+        WandbConnectionStore,
+        WandbCredentialError,
+        validate_api_key,
+        verify_api_key,
+    )
+
+    warning = None
+    try:
+        key = validate_api_key(body.api_key)
+        entity = verify_api_key(key)
+    except WandbCredentialError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if entity is None:
+        warning = "Saved, but couldn't reach wandb.ai to verify the key."
+    try:
+        status = WandbConnectionStore().set(api_key=key, entity=entity)
+    except WandbCredentialError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return _wandb_dto(status, warning)
+
+
+class ClearWandbConnectionResponse(BaseModel):
+    cleared: bool
+    # Status AFTER clearing: removing the stored key can reveal an ambient one
+    # from $WANDB_API_KEY / ~/.netrc, and the UI must not claim "disconnected"
+    # when the next run would still be tracked.
+    connection: WandbConnectionDTO
+
+
+@router.delete("/wandb/connection", response_model=ClearWandbConnectionResponse)
+def clear_wandb_connection() -> ClearWandbConnectionResponse:
+    """Remove the GUI-stored W&B key. Idempotent.
+
+    Does not touch ``$WANDB_API_KEY`` or ``~/.netrc`` — those belong to the
+    user's shell, not to us.
+    """
+    from lerobot.gui.training.wandb_credentials import WandbConnectionStore
+
+    store = WandbConnectionStore()
+    cleared = store.clear()
+    return ClearWandbConnectionResponse(cleared=cleared, connection=_wandb_dto(store.status()))
 
 
 # ── Policy catalog (GET /api/training/policies) ───────────────────────────────

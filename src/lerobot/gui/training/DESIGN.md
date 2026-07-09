@@ -54,6 +54,8 @@ Every real training run is `docker run … ghcr.io/thewisp/lerobot-training:<tag
 
 This is the forcing function: "works on my workstation" cannot silently diverge from "works on Nebius" because they're running the same image bit-for-bit. Optimisations that skip bytes-on-the-wire (mount the HF dataset cache instead of staging files; mount the checkpoint dir instead of SCPing back) are fine — but the runtime environment is identical to a remote pod.
 
+**Local-native exception.** On the workstation host only, the user may opt a run into *native* execution (`Run.args["__execution__"]="native"`): the trainer runs directly in the GUI server's own Python env (`sys.executable -m lerobot.scripts.lerobot_train …`) with no container. This trades the reproducibility guarantee for zero setup — no Docker install, no 10–13 min image pull — which is the right default for someone who already `uv sync`ed the repo. Docker stays the default and the *only* option for remote/ephemeral hosts (the GUI server's venv doesn't exist there); the orchestrator's launch preflight rejects native-on-remote and, for a docker run, fails clearly if `docker` is absent. The recipe builder emits either the `docker run …` argv or the bare `python -m …` argv from the same forced-flag / output-dir logic — see `recipes.EXECUTION_MODE_KEY`.
+
 ### Local-first preparation: do everything that doesn't need the GPU before opening a pod
 
 The billing clock starts when the provider returns "VM ready." Anything the orchestrator can do on the GUI server's box first is free. Concrete prep, in order, before the orchestrator calls `provider.spawn(...)`:
@@ -471,7 +473,7 @@ Beyond that one thread, the orchestrator is sync. FastAPI's own thread pool hand
 
 ### Authentication
 
-Two distinct credential surfaces. SSH for persistent hosts uses the user's own SSH setup (no GUI-managed keys at all). The Nebius service-account key for Ephemeral mode is one server-held credential, configured once. The training pod itself sees neither.
+Three distinct credential surfaces. SSH for persistent hosts uses the user's own SSH setup (no GUI-managed keys at all). The Nebius service-account key for Ephemeral mode is one server-held credential, configured once; the training pod never sees it. The Weights & Biases key is the one credential that *must* reach the pod — the trainer is what talks to wandb.ai — and is the only one, so it gets its own handling rules below.
 
 **The GUI has no login of its own.** It was built as a single-operator tool, so any credential held _on the server_ — the ambient HF token (`~/.cache/huggingface/token`), the SSH key the local `ssh` client resolves, and now the Nebius key — is usable by anyone who can reach the server's port. There are no per-user sessions to scope a credential to. This is the one trust assumption everything below rests on; the moment the GUI is exposed to a LAN with untrusted users it is violated, for HF _today_, not just for Nebius. Per-user scoping requires a real auth layer on the GUI (listed under Future enhancements); until that exists, "server-held" means "shared by whoever can reach the GUI."
 
@@ -483,7 +485,11 @@ This is the _same_ trust model as the existing SSH key and HF token: a server-he
 
 **HF — unchanged.** The GUI server already reads `~/.cache/huggingface/token` for its existing Hub features; the training pipeline reuses this for cache-side dataset access. The training pod itself receives no HF token. The shared-server-identity limitation is identical to the Nebius key's, and predates this work.
 
-**Security properties.** The Nebius key is held in one `0600` file the operator placed there deliberately; never returned to a client, never logged, never on the pod. SSH private keys never enter the backend at all (resolved by the user's local `ssh` client). Compromised backend worst case: the one Nebius service-account key and the ambient HF token are exposed — mitigated by scoping the service account to a dedicated project and rotating the key (re-paste replaces it; Clear removes it). Pod compromise: zero external credentials to leak.
+**Weights & Biases — resolved, never collected.** Tracking is opt-in per run (a checkbox in the start form; `wandb.enable` defaults false in the recipe). The server resolves the key from three sources, first hit wins: a key pasted into the GUI (`~/.config/lerobot/wandb/api_key`, `0600`), `$WANDB_API_KEY` in the server's environment, then the `api.wandb.ai` entry `wandb login` writes to `~/.netrc`. The last two mean a user who already uses wandb on this machine is connected without pasting anything — which is the whole ergonomic point. A pasted key is verified against wandb.ai's `viewer` query before it's stored, so a typo is caught in the form rather than 30 seconds into a run; an unreachable wandb.ai downgrades to a warning rather than blocking.
+
+Three rules keep the key out of places it would be hard to get back from. It is **resolved at launch, not at submit** — `Run.args` is persisted to disk and echoed back to the browser in the run-detail Configuration table, so the key never enters it. It **travels by name, not by value** — the docker recipe emits `-e WANDB_API_KEY` (no `=value`), letting docker copy it from the orchestrator-populated process environment, because an argv is world-readable via `ps`. For SSH hosts, `SshClient.launch` writes the env to a `0600` file over the SSH channel's stdin and sources it, for the same reason on both ends of the connection. And it is **only attached to a tracked run** — forwarding unconditionally would push the server's ambient key into every container the GUI launches. See `wandb_credentials.py`.
+
+**Security properties.** The Nebius key is held in one `0600` file the operator placed there deliberately; never returned to a client, never logged, never on the pod. SSH private keys never enter the backend at all (resolved by the user's local `ssh` client). The W&B key is returned to clients only as a masked tail (`…4567`) and never appears in an argv, but it *is* present in the training container's environment for a tracked run — inherent to what tracking does. Compromised backend worst case: the one Nebius service-account key, the ambient HF token, and the W&B key are exposed — mitigated by scoping the service account to a dedicated project and rotating the keys (re-paste replaces; Clear removes). Pod compromise: nothing to leak beyond the W&B key of a tracked run.
 
 ### Cost discipline
 
@@ -538,6 +544,6 @@ Same pattern LeRobot already uses for hardware (`lerobot[aloha]`, `lerobot[feete
 - **Auto-discovery of the user's machine** as a candidate Persistent host (depends on the helper).
 - **Multi-GPU support** — `gpu_count` schema field already present; needs the slot abstraction.
 - **Auto-push on completion** — Models tab gets a "publish on completion" toggle per run/recipe.
-- **Native experiment-tracking surfaces** — v1 surfaces native progress + metric curves in the run detail (see § Polling, logs, and signals) parsed from the real runner's stdout, plus a W&B deep-link when a run uses it. Deeper integration (TensorBoard embedding, multi-run compare) is a later pass.
+- **Native experiment-tracking surfaces** — v1 surfaces native progress + metric curves in the run detail (see § Polling, logs, and signals) parsed from the real runner's stdout. W&B tracking is opt-in per run (see § Authentication) and the run detail deep-links the run URL scraped from the trainer's stdout. Deeper integration (TensorBoard embedding, multi-run compare) is a later pass.
 - **Additional Models-tab push destinations** — S3, GCS, vendor object stores, NAS over rsync.
 - **GUI-server disk pre-flight + adaptive retention** (see Robustness).

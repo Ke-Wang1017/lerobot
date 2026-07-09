@@ -1575,7 +1575,32 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     max-height: 280px;
     overflow: auto;
     white-space: pre-wrap;
+    user-select: text;
+    cursor: text;
 }
+
+/* W&B key paste row: input + Connect + "get your key" link on one line. */
+.training-wandb-connect {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+    flex-wrap: wrap;
+}
+.training-wandb-connect input {
+    flex: 1 1 260px;
+    min-width: 0;
+}
+
+/* Heading with a right-aligned action (e.g. the log tail's Copy button). */
+.training-card-heading-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+.training-card-heading-row .training-card-heading { margin-bottom: 0; }
 
 .training-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 .training-muted { color: #888; }

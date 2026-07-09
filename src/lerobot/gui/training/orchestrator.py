@@ -47,7 +47,9 @@ from lerobot.gui.training.providers import get_provider
 from lerobot.gui.training.providers.protocol import HostHandle
 from lerobot.gui.training.recipes import (
     build_lerobot_train_command,
+    docker_available,
     is_fake_recipe,
+    is_native_local,
     output_subdir_in_run,
     resolve_host_placeholders,
 )
@@ -66,6 +68,7 @@ from lerobot.gui.training.transport import (
     TransportClient,
     make_client,
 )
+from lerobot.gui.training.wandb_credentials import wandb_env_for_args
 
 logger = logging.getLogger(__name__)
 
@@ -667,6 +670,17 @@ class Orchestrator:
             self._emit_event(local, paths.events_jsonl, "prereqs_ready", host_id=host.id)
         try:
             cmd = self._build_command(run, paths)
+            # Preflight guards before we spend time on image prep / launch.
+            # Both flip the run to FAILED with an actionable message instead of
+            # letting a raw error surface mid-launch.
+            preflight_error = self._launch_preflight_error(run, client)
+            if preflight_error is not None:
+                run.error = preflight_error
+                run.advance(RunState.FAILED)
+                self._runs.save(run)
+                self._emit_event(client, paths.events_jsonl, "prereqs_failed", error=run.error)
+                self._maybe_teardown_ephemeral(run, paths)
+                return
             image = _extract_image_from_docker_argv(cmd)
             if image is not None:
                 self._ensure_image(client, image, paths)
@@ -811,6 +825,39 @@ class Orchestrator:
         # paths.root is the right thing to pass in either case.
         return client.launch(command=command, env=env, workdir=paths.root, log_path=paths.stderr_log)
 
+    def _launch_preflight_error(self, run: Run, client: TransportClient) -> str | None:
+        """Reasons a run can't launch, checked before image prep. Returns an
+        actionable message to fail with, or None if the run may proceed.
+
+        At launch time a :class:`SubprocessClient` means the local workstation
+        host — ephemeral runs hold an :class:`SshClient` once spawned, and
+        persistent hosts are SSH. So ``isinstance(client, SubprocessClient)``
+        is the "is this local?" test the two guards below share.
+        """
+        is_local = isinstance(client, SubprocessClient)
+        # Native/local execution runs the trainer in the GUI server's OWN
+        # Python env — meaningless on a remote host (that venv isn't there).
+        # The form only offers it for the local host; guard hand-crafted runs.
+        if is_native_local(run) and not is_local:
+            return (
+                "Local (native) execution runs training in this machine's Python environment, "
+                "so it only works on the workstation host ('This server'). Choose Docker "
+                "execution to run on a remote or cloud host."
+            )
+        # A local docker run needs a working `docker` on the GUI server.
+        # SubprocessClient.ensure_prereqs() intentionally does not install
+        # Docker on the user's own machine, so guard here — otherwise a missing
+        # binary surfaces as a raw FileNotFoundError from subprocess.Popen at
+        # launch. Remote hosts check docker via the SSH probe / ensure_prereqs.
+        if is_local and not is_native_local(run) and not is_fake_recipe(run) and not docker_available():
+            return (
+                "Docker is not installed on this machine. Either install Docker "
+                "(https://docs.docker.com/engine/install/) and add your user to the `docker` "
+                "group, or pick 'Local (native)' execution to train directly in this machine's "
+                "Python environment without Docker."
+            )
+        return None
+
     def _build_command(self, run: Run, paths: RunPaths) -> list[str]:
         """Compose the worker command via the recipe builder.
 
@@ -827,13 +874,20 @@ class Orchestrator:
 
         Recipe-builder env (e.g., HF_HUB_OFFLINE for future scratch-staging)
         plus a few orchestrator-side breadcrumbs the existing fake runner
-        consults.
+        consults, plus ``WANDB_API_KEY`` when the run opted into tracking.
+
+        The W&B key resolves here, at launch, rather than being baked into
+        Run.args at submit: args are persisted to disk and echoed back to the
+        browser in the run-detail Configuration table, and a secret must be in
+        neither. Native runs read it straight from this env; docker runs get it
+        via the recipe's ``-e WANDB_API_KEY`` name-only passthrough.
         """
         _, recipe_env = build_lerobot_train_command(run, paths)
         return {
             "LEROBOT_RUN_ID": run.run_id,
             "LEROBOT_RUN_DIR": str(paths.root),
             **recipe_env,
+            **wandb_env_for_args(run.args),
         }
 
     def _reconcile_from_events_only(self, run: Run, paths: RunPaths) -> bool:

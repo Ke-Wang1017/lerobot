@@ -219,6 +219,34 @@ function trainingRefreshNebiusConnStatusLine() {
       `<a href="#" onclick="trainingOpenNebiusConnection(); return false;" style="color:var(--accent,#0e639c);">set it up</a>`;
   }
 }
+// ── Weights & Biases connection ───────────────────────────────────────────────
+//
+// One server-held key, shared by every run. The server resolves it from three
+// places (a key pasted here, $WANDB_API_KEY, or ~/.netrc from `wandb login`),
+// so anyone who has ever logged into wandb on this machine is already
+// connected and never sees the paste box. Shape:
+//   {configured, source: "stored"|"env"|"netrc"|null, masked_key, entity, warning}
+let _trainingWandbConn = null;
+
+const WANDB_AUTHORIZE_URL = "https://wandb.ai/authorize";
+
+// A 404 here means the ROUTE is missing, not the key: the browser reloaded
+// this file from disk while an older Python process still serves the API.
+// Say so, rather than rendering FastAPI's stock "Not Found" at the user.
+const WANDB_STALE_SERVER_MSG =
+  "This GUI server was started before W&B support was added — restart it (Ctrl-C, then `lerobot-gui`) to connect.";
+
+async function trainingFetchWandbConnection() {
+  try {
+    const resp = await fetch("/api/training/wandb/connection");
+    if (resp.status === 404) _trainingWandbConn = { configured: false, stale_server: true };
+    else _trainingWandbConn = resp.ok ? await resp.json() : null;
+  } catch {
+    _trainingWandbConn = null;
+  }
+  return _trainingWandbConn;
+}
+
 let _trainingDatasets = [];
 let _trainingPolicyCatalog = []; // populated by trainingLoadPolicies()
 let _trainingPollTimer = null;
@@ -544,9 +572,36 @@ function trainingLeaveView() {
 
 // ── Detail pane ───────────────────────────────────────────────────────────────
 
+// The detail pane is re-rendered wholesale (innerHTML) on every 3s poll, which
+// tears down any text the user is selecting — dragging across the log tail
+// never survived long enough to hit Ctrl-C. Track the mouse button so we can
+// hold the re-render while a drag is in flight; a finished-but-live selection
+// is detected separately via trainingPaneHasSelection().
+let _trainingPointerDownInPane = false;
+
+document.addEventListener("mousedown", (e) => {
+  const el = document.getElementById("training-detail");
+  _trainingPointerDownInPane = !!(el && el.contains(e.target));
+});
+document.addEventListener("mouseup", () => {
+  _trainingPointerDownInPane = false;
+});
+
+// True while a non-empty selection lives inside `el`. Text nodes are fine —
+// Node.contains() accepts them.
+function trainingPaneHasSelection(el) {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+  return el.contains(sel.getRangeAt(0).commonAncestorContainer);
+}
+
 async function trainingRefreshDetail(runId) {
   const el = document.getElementById("training-detail");
   if (!el || _trainingMode !== "detail") return;
+  // Don't yank the DOM out from under a selection or an in-progress drag.
+  // The next poll re-renders once the user clicks away, and the Copy button
+  // reads the full log regardless of what's on screen.
+  if (_trainingPointerDownInPane || trainingPaneHasSelection(el)) return;
   try {
     const resp = await fetch(`/api/training/runs/${runId}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -601,6 +656,27 @@ function trainingFmtDuration(s) {
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m ${sec}s`;
   return `${sec}s`;
+}
+
+// Copy the full log tail — the whole <pre>, not just the visible scroll window.
+// Reuses run.js's clipboard helper, which falls back to execCommand on plain
+// HTTP (navigator.clipboard is undefined outside secure contexts).
+function trainingCopyLog() {
+  const pre = document.querySelector("#training-detail .training-log");
+  if (!pre) return;
+  const done = (ok) => {
+    if (typeof showToast === "function") {
+      showToast("Log tail", ok ? "Copied to clipboard" : "Copy failed", ok ? "info" : "error");
+    }
+  };
+  if (typeof _copyTextToClipboard === "function") {
+    _copyTextToClipboard(pre.textContent).then(done);
+  } else {
+    navigator.clipboard.writeText(pre.textContent).then(
+      () => done(true),
+      () => done(false)
+    );
+  }
 }
 
 // First Weights & Biases run URL in the log tail, if the run uses wandb.
@@ -773,7 +849,11 @@ function trainingRenderDetailHtml(snap) {
       </section>
 
       <section class="training-card">
-        <h3 class="training-card-heading">Log tail</h3>
+        <div class="training-card-heading-row">
+          <h3 class="training-card-heading">Log tail</h3>
+          <button type="button" class="btn-small secondary" onclick="trainingCopyLog()"
+                  title="Copy the whole log tail to the clipboard">Copy</button>
+        </div>
         <pre class="training-log">${escapeHtml(snap.stderr_tail || "(no output yet)")}</pre>
       </section>
 
@@ -802,13 +882,17 @@ function trainingConfigCardHtml(r) {
   // labeled clearly. They're what determined which trainer ran + which
   // image was used.
   const recipeMarker = args["__recipe__"] || "lerobot-train";
-  const imageMarker = args["__image__"] || "(default)";
+  const isNative = args["__execution__"] === "native";
+  const execLabel = isNative ? "Local (native)" : "Docker";
+  // Image is only meaningful for Docker execution; native runs in this venv.
+  const imageMarker = isNative ? "— (native)" : args["__image__"] || "(default)";
   return `
     <section class="training-card">
       <details class="training-section" open>
         <summary class="training-section-summary">Configuration</summary>
         <table class="training-args-table">
           <tr><th>Recipe</th><td class="training-mono">${escapeHtml(recipeMarker)}</td></tr>
+          <tr><th>Execution</th><td class="training-mono">${escapeHtml(execLabel)}</td></tr>
           <tr><th>Image</th><td class="training-mono">${escapeHtml(imageMarker)}</td></tr>
           ${rows.join("")}
         </table>
@@ -834,6 +918,9 @@ async function trainingShowStartForm(prefill) {
       '<div class="training-detail-pane"><div class="training-empty-hint">Loading datasets + policy catalog…</div></div>';
     await Promise.all([trainingLoadDatasets(), trainingLoadPolicies()]);
   }
+  // Re-read the W&B connection on every form-open, not just the first: the
+  // user may have run `wandb login` in a terminal since the last one.
+  await trainingFetchWandbConnection();
   if (_trainingMode === "form") trainingRenderStartForm(prefill); // user might have nav'd away
   trainingRefreshRuns(); // unselect any previously-highlighted row
 }
@@ -953,6 +1040,158 @@ const TRAINING_FIELDS = [
   { key: "save_freq", label: "Save every N steps", type: "int", default: 500 },
 ];
 
+// ── Experiment tracking (W&B) form section ────────────────────────────────────
+//
+// The ergonomics we're after: a user with wandb already set up ticks nothing
+// and pastes nothing — the checkbox is pre-ticked and the status line says
+// which key it will use. A user without one gets a paste box right where the
+// decision is made, plus the link that mints the key. Nobody has to leave the
+// form, and nobody has to know that `wandb.enable` is a lerobot-train flag.
+//
+// Only draccus recipes (lerobot-train) accept the `--wandb.*` flags; the HVLA
+// argparse trainer rejects them, so the whole section hides for those. See
+// trainingRenderPolicyFields.
+
+function trainingWandbSectionHtml() {
+  return `
+    <details class="training-section" id="training-wandb-section" open>
+      <summary class="training-section-summary">Experiment tracking</summary>
+      <label class="training-field training-field-bool">
+        <span class="training-field-label">Log this run to Weights &amp; Biases</span>
+        <input type="checkbox" name="wandb_enable" onchange="trainingOnWandbToggle()" />
+        <span class="training-field-hint">Streams loss, learning rate and grad-norm to your W&amp;B project as the run trains, and puts a link to it in the run detail.</span>
+      </label>
+      <div id="training-wandb-body" style="display:none;">
+        <div id="training-wandb-status" class="training-field-hint"></div>
+        <div class="training-field-row">
+          <label class="training-field">
+            <span class="training-field-label">W&amp;B project</span>
+            <input type="text" name="wandb_project" value="lerobot" />
+            <span class="training-field-hint">Created on first run if it doesn't exist.</span>
+          </label>
+          <label class="training-field">
+            <span class="training-field-label">Team / entity</span>
+            <input type="text" name="wandb_entity" value="" placeholder="(optional — your personal account)" />
+            <span class="training-field-hint">Only needed to log into a team rather than your own account.</span>
+          </label>
+        </div>
+        <label class="training-field training-field-bool">
+          <span class="training-field-label">Upload checkpoints as W&amp;B artifacts</span>
+          <input type="checkbox" name="wandb_upload_artifacts" />
+          <span class="training-field-hint">Off by default — checkpoints are gigabytes for the larger policies, and they're already saved on the training host.</span>
+        </label>
+      </div>
+    </details>
+  `;
+}
+
+// Status line + connect box. Rendered into #training-wandb-status on every
+// state change (open, connect, disconnect) rather than baked into the section
+// HTML, so a connect doesn't rebuild the form and lose what's typed above it.
+function trainingWandbStatusHtml() {
+  const st = _trainingWandbConn;
+  const disconnect = `<a href="#" onclick="trainingDisconnectWandb(); return false;" style="color:var(--accent,#0e639c);">use a different key</a>`;
+  if (st && st.stale_server) {
+    return `<div style="color:#e5c07b;">${escapeHtml(WANDB_STALE_SERVER_MSG)}</div>`;
+  }
+  if (st && st.configured) {
+    let who;
+    if (st.source === "stored") {
+      who = st.entity ? `Connected as <strong>${escapeHtml(st.entity)}</strong>` : "Connected";
+    } else if (st.source === "env") {
+      who = "Using <span class='training-mono'>$WANDB_API_KEY</span> from this server's environment";
+    } else {
+      who = "Using the key from <span class='training-mono'>~/.netrc</span> (<span class='training-mono'>wandb login</span>)";
+    }
+    const masked = st.masked_key ? ` <span class="training-mono training-muted">(${escapeHtml(st.masked_key)})</span>` : "";
+    const warn = st.warning ? `<div style="color:#e5c07b;">${escapeHtml(st.warning)}</div>` : "";
+    return `<div><span style="color:#98c379;">✓</span> ${who}${masked} · ${disconnect}</div>${warn}`;
+  }
+  return `
+    <div style="color:#e5c07b;">No W&amp;B API key found on this server.</div>
+    <div class="training-wandb-connect">
+      <input type="password" id="training-wandb-key" autocomplete="off" spellcheck="false"
+             placeholder="Paste your W&B API key" onkeydown="trainingWandbKeyKeydown(event)" />
+      <button type="button" class="btn-small" onclick="trainingConnectWandb()">Connect</button>
+      <a href="${WANDB_AUTHORIZE_URL}" target="_blank" rel="noopener" style="color:var(--accent,#0e639c);">Get your key ↗</a>
+    </div>
+    <div>The key is stored on this server (<span class="training-mono">~/.config/lerobot/wandb</span>, owner-readable only) and reused by every run. Running <span class="training-mono">wandb login</span> on the server works too.</div>
+  `;
+}
+
+// The paste box lives inside the start form, so Enter would submit the whole
+// form and start a training run. Intercept it into the Connect action, which
+// is what the key stroke means there.
+function trainingWandbKeyKeydown(ev) {
+  if (ev.key !== "Enter") return;
+  ev.preventDefault();
+  trainingConnectWandb();
+}
+
+function trainingRefreshWandbStatus() {
+  const el = document.getElementById("training-wandb-status");
+  if (el) el.innerHTML = trainingWandbStatusHtml();
+}
+
+// Body (project/entity/artifacts + status) only shows when tracking is on —
+// an untracked run has nothing to configure.
+function trainingOnWandbToggle() {
+  const form = document.getElementById("training-start-form");
+  const body = document.getElementById("training-wandb-body");
+  if (!form || !body) return;
+  const on = form.querySelector("input[name=wandb_enable]")?.checked;
+  body.style.display = on ? "" : "none";
+  if (!on) return;
+  trainingRefreshWandbStatus();
+  // Ticking the box with no key is the moment to ask for one.
+  document.getElementById("training-wandb-key")?.focus();
+}
+
+async function trainingConnectWandb() {
+  const input = document.getElementById("training-wandb-key");
+  const statusEl = document.getElementById("training-wandb-status");
+  if (!input || !statusEl) return;
+  const apiKey = input.value.trim();
+  if (!apiKey) {
+    input.focus();
+    return;
+  }
+  statusEl.innerHTML = `<span style="color:#e5c07b;">Verifying with wandb.ai…</span>`;
+  try {
+    const resp = await fetch("/api/training/wandb/connection", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: apiKey }),
+    });
+    if (resp.status === 404) throw new Error(WANDB_STALE_SERVER_MSG);
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+    _trainingWandbConn = data;
+    trainingRefreshWandbStatus();
+    if (typeof showToast === "function") {
+      showToast("Weights & Biases", data.entity ? `Connected as ${data.entity}` : "API key saved", "info");
+    }
+  } catch (e) {
+    statusEl.innerHTML =
+      `<div style="color:#e06c75;">${escapeHtml(e.message || String(e))}</div>` + trainingWandbStatusHtml();
+    document.getElementById("training-wandb-key").value = apiKey;
+  }
+}
+
+async function trainingDisconnectWandb() {
+  try {
+    const resp = await fetch("/api/training/wandb/connection", { method: "DELETE" });
+    const data = await resp.json().catch(() => ({}));
+    // The server reports the state AFTER clearing: an ambient $WANDB_API_KEY or
+    // ~/.netrc key survives, and the status line must keep saying so.
+    _trainingWandbConn = data.connection || null;
+  } catch {
+    _trainingWandbConn = null;
+  }
+  trainingRefreshWandbStatus();
+  document.getElementById("training-wandb-key")?.focus();
+}
+
 function trainingRenderStartForm(prefill) {
   const el = document.getElementById("training-detail");
   if (!el || _trainingMode !== "form") return;
@@ -993,7 +1232,16 @@ function trainingRenderStartForm(prefill) {
 
         <label class="training-field">
           <span class="training-field-label">Host</span>
-          <select name="host_id" required>${hostOptions}</select>
+          <select name="host_id" required onchange="trainingOnHostChange(this.value)">${hostOptions}</select>
+        </label>
+
+        <label class="training-field" id="training-exec-field">
+          <span class="training-field-label">Execution</span>
+          <select name="execution_mode">
+            <option value="native">Local (native — this machine's Python env, no Docker)</option>
+            <option value="docker">Docker (reproducible pinned training image)</option>
+          </select>
+          <span class="training-field-hint">Local runs train directly in the GUI server's Python environment — fastest to start, no Docker install or image pull. Docker runs inside the pinned training image for bit-for-bit parity with cloud hosts. Remote / cloud hosts always use Docker.</span>
         </label>
 
         <label class="training-field">
@@ -1032,6 +1280,8 @@ function trainingRenderStartForm(prefill) {
           </div>
         </details>
 
+        ${trainingWandbSectionHtml()}
+
         <div class="training-form-actions">
           <button type="submit" class="btn-small">Start training</button>
           <button type="button" class="btn-small secondary" onclick="trainingCancelForm()">Cancel</button>
@@ -1044,11 +1294,46 @@ function trainingRenderStartForm(prefill) {
   // policy from its args; otherwise fall back to the first catalog entry.
   const initialPolicy =
     trainingPolicyFromArgs(prefill?.args) || _trainingPolicyCatalog[0]?.type_name || "";
+  // Default tracking ON when a key is already available: the user connected
+  // (or ran `wandb login`) precisely so their runs would be tracked. With no
+  // key it stays off, so a first-time user is never blocked by a dialog.
+  const wandbBox = el.querySelector("input[name=wandb_enable]");
+  if (wandbBox) wandbBox.checked = !!_trainingWandbConn?.configured;
+  trainingOnWandbToggle();
   trainingRenderPolicyFields(initialPolicy);
   if (prefill) trainingApplyPrefill(prefill, initialPolicy);
+  // Sync the Execution field to the selected host (hidden + forced to Docker
+  // for remote/cloud hosts, which can't run in the GUI server's local env).
+  const hostSel = el.querySelector("select[name=host_id]");
+  trainingOnHostChange(hostSel ? hostSel.value : "");
+  // Prefill's execution mode wins if the same (local) host still allows it.
+  const prefExec = prefill?.args?.["__execution__"];
+  const execSel = el.querySelector("select[name=execution_mode]");
+  if (prefExec && execSel && !execSel.disabled) execSel.value = prefExec;
   // Fill the finetune-base datalist from discovered checkpoints (async;
   // the field is usable as free text meanwhile).
   trainingPopulateFinetuneOptions();
+}
+
+// Toggle the Execution field to match the selected host. Native (no-docker)
+// execution runs in the GUI server's own Python env, so it only makes sense
+// on the local workstation host (transport_kind === "subprocess"). Remote and
+// ephemeral hosts are pinned to Docker; the field is hidden + disabled so its
+// value doesn't reach the submit body (see trainingSubmitStart).
+function trainingOnHostChange(hostId) {
+  const host = _trainingHosts.find((h) => h.id === hostId);
+  const field = document.getElementById("training-exec-field");
+  const sel = field?.querySelector("select[name=execution_mode]");
+  if (!field || !sel) return;
+  const isLocal = host?.transport_kind === "subprocess";
+  if (isLocal) {
+    field.style.display = "";
+    sel.disabled = false;
+  } else {
+    sel.value = "docker";
+    sel.disabled = true;
+    field.style.display = "none";
+  }
 }
 
 // Discover local checkpoints usable as a finetune base, from the same model
@@ -1168,6 +1453,23 @@ function trainingApplyPrefill(prefill, policyType) {
     if (fpInput) fpInput.value = String(prefillArgs["policy.pretrained_path"]);
   }
 
+  // Experiment tracking — the wandb.* args map onto differently-named inputs
+  // (and `disable_artifact` is the negation of the checkbox), so the generic
+  // field loop below can't reach them. A cloned run that was tracked stays
+  // tracked, unless the key has since gone away.
+  const wandbOn = prefillArgs["wandb.enable"] === true || prefillArgs["wandb.enable"] === "true";
+  const wandbBox = form.querySelector("input[name=wandb_enable]");
+  if (wandbBox) {
+    wandbBox.checked = wandbOn && !!_trainingWandbConn?.configured;
+    const proj = form.querySelector("input[name=wandb_project]");
+    const ent = form.querySelector("input[name=wandb_entity]");
+    const art = form.querySelector("input[name=wandb_upload_artifacts]");
+    if (proj && prefillArgs["wandb.project"]) proj.value = String(prefillArgs["wandb.project"]);
+    if (ent && prefillArgs["wandb.entity"]) ent.value = String(prefillArgs["wandb.entity"]);
+    if (art) art.checked = prefillArgs["wandb.disable_artifact"] === false;
+    trainingOnWandbToggle();
+  }
+
   // Fill each field by its FORM KEY (= arg_key_prefix + field.name).
   // Catalog fields use bare ``name``; shared TRAINING_FIELDS use ``key``.
   // The input's HTML name attribute is the form key in both cases.
@@ -1212,6 +1514,11 @@ function trainingRenderPolicyFields(policyType) {
     key: trainingFormKey(policy, f),
   }));
   container.innerHTML = `<div class="training-field-row">${fields.map(fieldHtml).join("")}</div>`;
+  // W&B is a lerobot-train (draccus) feature. Non-draccus recipes like HVLA
+  // run their own argparse trainer, which rejects `--wandb.enable` outright,
+  // so don't offer tracking for them.
+  const wandbSection = document.getElementById("training-wandb-section");
+  if (wandbSection) wandbSection.style.display = policy.recipe ? "none" : "";
 }
 
 function fieldHtml(f) {
@@ -1314,6 +1621,39 @@ async function trainingSubmitStart(ev) {
     }
     args["policy.pretrained_path"] = finetunePath;
   }
+
+  // Experiment tracking. `wandb.enable` is one of the recipe's SOFT-forced
+  // flags (default false, user wins), so setting it here is all it takes.
+  // The API key is never sent with the run — the server resolves it at launch
+  // from its own connection store, keeping it out of the persisted args dict.
+  if (!recipe && fd.get("wandb_enable")) {
+    if (!_trainingWandbConn?.configured) {
+      const errEl = document.getElementById("training-start-error");
+      if (errEl) {
+        errEl.style.display = "block";
+        errEl.textContent =
+          "Connect a Weights & Biases API key before starting a tracked run, or untick “Log this run to Weights & Biases”.";
+      }
+      document.getElementById("training-wandb-key")?.focus();
+      return;
+    }
+    args["wandb.enable"] = true;
+    const project = (fd.get("wandb_project") || "").trim();
+    if (project) args["wandb.project"] = project;
+    const entity = (fd.get("wandb_entity") || "").trim();
+    if (entity) args["wandb.entity"] = entity;
+    // Inverted on purpose: lerobot-train's flag is `disable_artifact`, but
+    // "upload my checkpoints" is the question the user can actually answer.
+    args["wandb.disable_artifact"] = !fd.get("wandb_upload_artifacts");
+  }
+
+  // Execution mode. Native (no-docker) only applies to the local workstation
+  // host; every other host runs via Docker. Only tag native explicitly —
+  // absent means docker (the backend default), keeping the args dict clean.
+  const startHostForExec = _trainingHosts.find((h) => h.id === hostId);
+  const isLocalHost = startHostForExec?.transport_kind === "subprocess";
+  const execMode = isLocalHost ? fd.get("execution_mode") || "native" : "docker";
+  if (execMode === "native") args["__execution__"] = "native";
 
   // Auto-generate a label if user didn't provide one
   let recipeName = (fd.get("recipe_name") || "").trim();

@@ -15,6 +15,7 @@ is validated end-to-end via the live smoke (see scripts/training/README.md
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from lerobot.gui.training.recipes import (
     CONTAINER_OUTPUT_SUBDIR,
     CONTAINER_RUNS_MOUNT,
     DEFAULT_IMAGE,
+    EXECUTION_NATIVE,
     FAKE_RECIPE_MARKER,
     HOST_GID_TOKEN,
     HOST_HOME_TOKEN,
@@ -35,6 +37,7 @@ from lerobot.gui.training.recipes import (
     docker_available,
     is_fake_recipe,
     is_hvla_flow_s1_recipe,
+    is_native_local,
     output_subdir_in_run,
     resolve_host_placeholders,
 )
@@ -250,6 +253,25 @@ def test_docker_recipe_user_flag_wins_for_soft_forced(tmp_path: Path) -> None:
     assert "--save_checkpoint=true" not in cmd
 
 
+def test_docker_recipe_forwards_wandb_key_by_name_only(tmp_path: Path) -> None:
+    """A tracked run gets ``-e WANDB_API_KEY`` — the NAME, so docker copies the
+    value from the launching process's env (which the orchestrator populates).
+    An ``-e NAME=value`` form would put the key in an argv, visible in `ps`."""
+    paths = RunPaths.for_run("xyz", runs_dir=tmp_path)
+    run = _make_run({"policy.type": "act", "wandb.enable": True})
+    cmd = _docker_cmd(run, paths)
+    assert cmd[cmd.index("WANDB_API_KEY") - 1] == "-e"
+    assert not any(t.startswith("WANDB_API_KEY=") for t in cmd)
+
+
+def test_docker_recipe_omits_wandb_key_for_untracked_runs(tmp_path: Path) -> None:
+    """Forwarding unconditionally would push the GUI server's ambient
+    WANDB_API_KEY into every container we launch."""
+    paths = RunPaths.for_run("xyz", runs_dir=tmp_path)
+    cmd = _docker_cmd(_make_run({"policy.type": "act"}), paths)
+    assert "WANDB_API_KEY" not in cmd
+
+
 def test_docker_recipe_translates_arg_types(tmp_path: Path) -> None:
     paths = RunPaths.for_run("xyz", runs_dir=tmp_path)
     run = _make_run(
@@ -304,6 +326,85 @@ def test_docker_available_truthy_when_docker_on_path() -> None:
 def test_docker_available_false_without_docker(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("lerobot.gui.training.recipes.shutil.which", lambda _: None)
     assert docker_available() is False
+
+
+# ── Native (no-docker) execution ──────────────────────────────────────────────
+
+
+def test_is_native_local_detects_marker() -> None:
+    assert is_native_local(_make_run({"__execution__": EXECUTION_NATIVE}))
+    assert not is_native_local(_make_run({}))
+    assert not is_native_local(_make_run({"__execution__": "docker"}))
+
+
+def test_native_recipe_runs_python_directly_no_docker(tmp_path: Path) -> None:
+    paths = RunPaths.for_run("nat", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _make_run(
+        {"policy.type": "act", "dataset.repo_id": "lerobot/pusht", "__execution__": EXECUTION_NATIVE}
+    )
+    cmd, env = build_lerobot_train_command(run, paths)
+    # Runs the trainer as a module in the current interpreter — never docker.
+    assert cmd[0] == sys.executable
+    assert cmd[1:4] == ["-u", "-m", "lerobot.scripts.lerobot_train"]
+    assert "docker" not in cmd
+    assert "--gpus" not in cmd
+    assert env == {}
+    # The execution marker doesn't leak into the argv.
+    assert not any("__execution__" in c for c in cmd)
+
+
+def test_native_recipe_output_dir_is_real_host_path(tmp_path: Path) -> None:
+    paths = RunPaths.for_run("nat", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _make_run({"policy.type": "act", "__execution__": EXECUTION_NATIVE})
+    cmd, _ = build_lerobot_train_command(run, paths)
+    # Not the /runs bind-mount target — a real path under the run dir the host
+    # (and the Models tab scanner) can read directly.
+    expected = str(paths.root / CONTAINER_OUTPUT_SUBDIR)
+    assert f"--output_dir={expected}" in cmd
+    assert f"--output_dir={CONTAINER_RUNS_MOUNT}/{CONTAINER_OUTPUT_SUBDIR}" not in cmd
+
+
+def test_native_recipe_keeps_safety_flags(tmp_path: Path) -> None:
+    paths = RunPaths.for_run("nat", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _make_run({"policy.type": "act", "__execution__": EXECUTION_NATIVE})
+    cmd, _ = build_lerobot_train_command(run, paths)
+    assert "--policy.push_to_hub=false" in cmd
+    assert "--wandb.enable=false" in cmd
+    assert "--save_checkpoint=true" in cmd
+
+
+def test_native_recipe_finetune_local_dir_passes_through_no_mount(tmp_path: Path) -> None:
+    ckpt = tmp_path / "ckpt"
+    ckpt.mkdir()
+    paths = RunPaths.for_run("nat", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _make_run(
+        {"policy.type": "act", "__execution__": EXECUTION_NATIVE, "policy.pretrained_path": str(ckpt)}
+    )
+    cmd, _ = build_lerobot_train_command(run, paths)
+    # Read from its real host path — no container, so no bind mount + no rewrite.
+    assert f"--policy.pretrained_path={ckpt}" in cmd
+    assert "-v" not in cmd
+    assert CONTAINER_FINETUNE_BASE not in " ".join(cmd)
+
+
+def test_native_hvla_recipe_runs_python_module_directly(tmp_path: Path) -> None:
+    paths = RunPaths.for_run("nat", runs_dir=tmp_path)
+    paths.ensure_exists()
+    run = _make_run(
+        {"__recipe__": HVLA_FLOW_S1_RECIPE, "__execution__": EXECUTION_NATIVE, "dataset_repo_id": "x"}
+    )
+    cmd, _ = build_lerobot_train_command(run, paths)
+    assert cmd[0] == sys.executable
+    assert cmd[1:4] == ["-u", "-m", "lerobot.policies.hvla.s1.flow_matching.train"]
+    assert "docker" not in cmd
+    # Output-dir forced to a real host path (dashed CLI: --output-dir <path>).
+    assert "--output-dir" in cmd
+    idx = cmd.index("--output-dir")
+    assert cmd[idx + 1] == str(paths.root / CONTAINER_OUTPUT_SUBDIR)
 
 
 # ── HVLA flow_matching S1 recipe ──────────────────────────────────────────────

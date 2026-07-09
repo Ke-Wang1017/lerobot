@@ -423,8 +423,10 @@ class SubprocessClient:
 
     def ensure_prereqs(self) -> None:
         # The GUI server is the user's own machine — don't apt-install Docker on
-        # it. Docker availability for local docker recipes is probed at run
-        # start (recipes.docker_available); nothing to do here.
+        # it. Docker availability for a local *docker* run is checked by the
+        # orchestrator's launch preflight (Orchestrator._launch_preflight_error,
+        # via recipes.docker_available); a local *native* run needs no docker at
+        # all. Either way there's nothing to provision here.
         return None
 
     def ensure_dir(self, path: Path) -> None:

@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from lerobot.gui.training import wandb_credentials
 from lerobot.gui.training.hosts import HostRegistry, TrainingHost
 from lerobot.gui.training.orchestrator import (
     HostBusyError,
@@ -152,6 +153,69 @@ def test_start_refuses_when_host_busy(orch: Orchestrator) -> None:
     finally:
         orch.stop(run1.run_id)
         _wait_until_state(orch, run1.run_id, RunState.ABORTED)
+
+
+# ── Launch preflight guards ─────────────────────────────────────────────────────
+
+
+def _preflight_run(**args) -> Run:
+    return Run(
+        run_id="pf",
+        host_id="test-host",
+        recipe_name="act-default",
+        dataset_id="lerobot/pusht",
+        args={"policy.type": "act", **args},
+        state=RunState.PENDING,
+        created_at=time.time(),
+    )
+
+
+def test_preflight_docker_missing_on_local_fails_clearly(
+    orch: Orchestrator, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("lerobot.gui.training.orchestrator.docker_available", lambda: False)
+    client = SubprocessClient(SubprocessTransport(workdir=tmp_path))
+    err = orch._launch_preflight_error(_preflight_run(), client)  # noqa: SLF001
+    assert err is not None
+    assert "Docker is not installed" in err
+    assert "Local (native)" in err  # points the user at the no-docker option
+
+
+def test_preflight_native_on_local_ok_even_without_docker(
+    orch: Orchestrator, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("lerobot.gui.training.orchestrator.docker_available", lambda: False)
+    client = SubprocessClient(SubprocessTransport(workdir=tmp_path))
+    err = orch._launch_preflight_error(_preflight_run(__execution__="native"), client)  # noqa: SLF001
+    assert err is None
+
+
+def test_preflight_docker_present_on_local_ok(
+    orch: Orchestrator, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("lerobot.gui.training.orchestrator.docker_available", lambda: True)
+    client = SubprocessClient(SubprocessTransport(workdir=tmp_path))
+    assert orch._launch_preflight_error(_preflight_run(), client) is None  # noqa: SLF001
+
+
+def test_preflight_native_on_remote_host_rejected(orch: Orchestrator, tmp_path: Path) -> None:
+    from lerobot.gui.training.ssh_transport import SshClient
+
+    client = SshClient(SshTransport(host="gpu-box", user="ubuntu"))
+    err = orch._launch_preflight_error(_preflight_run(__execution__="native"), client)  # noqa: SLF001
+    assert err is not None
+    assert "workstation host" in err
+
+
+def test_preflight_fake_recipe_skips_docker_check(
+    orch: Orchestrator, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The fake recipe runs plain Python — a missing docker must not block it.
+    monkeypatch.setattr("lerobot.gui.training.orchestrator.docker_available", lambda: False)
+    client = SubprocessClient(SubprocessTransport(workdir=tmp_path))
+    run = _preflight_run()
+    run = _dc.replace(run, args={"__recipe__": "__fake__"})
+    assert orch._launch_preflight_error(run, client) is None  # noqa: SLF001
 
 
 # ── End-to-end happy path ──────────────────────────────────────────────────────
@@ -797,6 +861,50 @@ def test_extract_image_unknown_flag_returns_none() -> None:
     # to try to docker-inspect a flag value.
     argv = ["docker", "run", "--rm", "--mystery-flag", "v", "img:tag", "cmd"]
     assert _extract_image_from_docker_argv(argv) is None
+
+
+# ── W&B key injection (resolved at launch, never persisted in Run.args) ──────
+
+
+def _wandb_run(args: dict, tmp_path: Path) -> Run:
+    return Run(
+        run_id="wandb-run",
+        host_id="test-host",
+        recipe_name="act-default",
+        dataset_id="ds",
+        args=args,
+        state=RunState.PENDING,
+        created_at=time.time(),
+    )
+
+
+def test_build_env_injects_wandb_key_for_tracked_run(
+    orch: Orchestrator, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The key lives only in the worker's env. Run.args is persisted to disk and
+    echoed back to the browser in the Configuration table — a secret must never
+    take that path, so the orchestrator resolves it here, at launch."""
+    # Isolate from the developer's own ~/.config/lerobot/wandb key, which would
+    # otherwise win the resolution order and mask the env var under test.
+    monkeypatch.setattr(wandb_credentials, "WANDB_DIR", tmp_path / "wandb-store")
+    monkeypatch.setenv("WANDB_API_KEY", "k" * 40)
+    args = {"policy.type": "act", "wandb.enable": True}
+    run = _wandb_run(args, tmp_path)
+    env = orch._build_env(run, RunPaths.for_run(run.run_id, runs_dir=tmp_path))
+    assert env["WANDB_API_KEY"] == "k" * 40
+    assert "WANDB_API_KEY" not in run.args
+
+
+def test_build_env_omits_wandb_key_for_untracked_run(
+    orch: Orchestrator, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Isolate from the developer's own ~/.config/lerobot/wandb key, which would
+    # otherwise win the resolution order and mask the env var under test.
+    monkeypatch.setattr(wandb_credentials, "WANDB_DIR", tmp_path / "wandb-store")
+    monkeypatch.setenv("WANDB_API_KEY", "k" * 40)
+    run = _wandb_run({"policy.type": "act"}, tmp_path)
+    env = orch._build_env(run, RunPaths.for_run(run.run_id, runs_dir=tmp_path))
+    assert "WANDB_API_KEY" not in env
 
 
 def test_image_cache_hit_emits_event_and_skips_pull(host, tmp_path: Path) -> None:

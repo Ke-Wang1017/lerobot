@@ -87,6 +87,10 @@ def _load_prereqs_script() -> str:
 # separator and base64-encode the workdir.
 _SESSION_SEP = "|"
 
+# Per-run env file the launch wrapper sources, written 0600 inside the remote
+# run dir. Holds whatever `launch(env=...)` carries — including secrets.
+_ENV_FILENAME = ".launch_env"
+
 
 class SshClient:
     """TransportClient impl for :class:`SshTransport`.
@@ -221,28 +225,44 @@ class SshClient:
         assert log_path.is_absolute(), f"SshClient requires absolute remote paths, got {log_path}"
 
         tmux_name = f"lerobot-{workdir.name}"
-        # Build the inner shell command: cd, env exports, command, then
-        # echo the exit code to a sibling file so we can recover it later.
-        env_exports = " ".join(f"{shlex.quote(k)}={shlex.quote(v)}" for k, v in env.items())
         cmd_quoted = shlex.join(command)
         workdir_q = shlex.quote(str(workdir))
         log_q = shlex.quote(str(log_path))
         exit_code_q = shlex.quote(str(workdir / ".exit_code"))
+        log_parent_q = shlex.quote(str(log_path.parent))
+        mkdir_cmd = f"mkdir -p {workdir_q} {log_parent_q}"
+
+        # Env reaches the worker through a 0600 file that the wrapper sources,
+        # never through a command line: ``env`` may carry WANDB_API_KEY, and an
+        # argv is world-readable via `ps` on BOTH this host (the ssh argv) and
+        # the remote (the tmux/bash argv). The file's content travels over the
+        # SSH channel's stdin, so it never appears in either argv. It stays in
+        # the run dir; nothing fetches it back (see the orchestrator's explicit
+        # per-file fetch list).
+        env_prefix = ""
+        if env:
+            env_file_q = shlex.quote(str(workdir / _ENV_FILENAME))
+            payload = "".join(f"export {shlex.quote(k)}={shlex.quote(v)}\n" for k, v in env.items())
+            # umask before the redirect: the file must never exist group-readable,
+            # not even for the instant between creation and a chmod.
+            r = self._exec(f"{mkdir_cmd} && umask 077 && cat > {env_file_q}", stdin=payload.encode())
+            if r.returncode != 0:
+                err = r.stderr.decode("utf-8", errors="replace")[-400:]
+                raise RuntimeError(f"SshClient.launch failed writing env file: rc={r.returncode} {err}")
+            env_prefix = f". {env_file_q} && "
 
         # Two-stage wrapping:
-        # 1. ``env_part cmd_part >> log 2>&1; echo $? > .exit_code`` — the
-        #    semicolon ensures echo runs even on worker failure, so the
-        #    artefact exists for both success and crash paths.
+        # 1. ``. env && cmd >> log 2>&1; echo $? > .exit_code`` — the semicolon
+        #    ensures echo runs even on worker failure, so the artefact exists
+        #    for both success and crash paths.
         # 2. ``bash -lc '<above>'`` — login shell so the worker inherits
         #    the remote user's PATH (matters for docker, uv, etc.).
-        inner = f"cd {workdir_q} && {env_exports} {cmd_quoted} >> {log_q} 2>&1; echo $? > {exit_code_q}"
+        inner = f"cd {workdir_q} && {env_prefix}{cmd_quoted} >> {log_q} 2>&1; echo $? > {exit_code_q}"
         bash_invocation = f"bash -lc {shlex.quote(inner)}"
 
         # Ensure remote dirs exist, then create the tmux session.
-        log_parent_q = shlex.quote(str(log_path.parent))
         remote_cmd = (
-            f"mkdir -p {workdir_q} {log_parent_q} && "
-            f"tmux new-session -d -s {shlex.quote(tmux_name)} {shlex.quote(bash_invocation)}"
+            f"{mkdir_cmd} && tmux new-session -d -s {shlex.quote(tmux_name)} {shlex.quote(bash_invocation)}"
         )
         r = self._exec(remote_cmd)
         if r.returncode != 0:

@@ -5,11 +5,19 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
-"""Recipe builder — composes the `docker run … lerobot-train …` argv from a Run.
+"""Recipe builder — composes the training argv from a Run.
 
-Image-everywhere (DESIGN.md § Unified execution): every training run is
-``docker run training-image lerobot-train ...``, on every host mode. The
-recipe builder produces that argv (plus an env dict) from a Run's args dict.
+Image-everywhere by default (DESIGN.md § Unified execution): a training run is
+``docker run training-image lerobot-train ...`` on every host mode, so a
+workstation and a cloud pod run the same image bit-for-bit. The recipe builder
+produces that argv (plus an env dict) from a Run's args dict.
+
+Local-native exception: on the workstation host a run may set
+``Run.args["__execution__"]="native"`` (see :data:`EXECUTION_MODE_KEY`) to run
+the trainer directly in the GUI server's own Python env — ``sys.executable -m
+lerobot.scripts.lerobot_train ...`` with no container. Same forced-flag and
+output-dir logic; only the wrapper (docker vs bare interpreter) and the
+finetune-base / output-dir paths differ.
 
 Run.args convention (flat dict, dotted keys):
 
@@ -39,7 +47,13 @@ the user override.
                                      was given — which 403s for any namespace
                                      the user can't write to. We never want
                                      a GUI-launched run to push automatically.
-  --wandb.enable=false             — no tracking in v1.
+  --wandb.enable=false             — tracking is opt-in. The start form flips
+                                     this to true (user-wins branch) once a
+                                     W&B key is connected; the docker recipe
+                                     then forwards ``WANDB_API_KEY`` into the
+                                     container by NAME (``-e WANDB_API_KEY``),
+                                     so the secret never lands in an argv.
+                                     See ``wandb_credentials.py``.
   --save_checkpoint=true           — explicit; checkpoints are how we close
                                      the felt loop in C3.
   --output_dir=/runs/output        — HARD-forced. Fixed subdir of the
@@ -68,6 +82,7 @@ from pathlib import Path
 from typing import Any
 
 from lerobot.gui.training.runs import Run, RunPaths
+from lerobot.gui.training.wandb_credentials import WANDB_API_KEY_ENV, wandb_enabled
 
 # Pinned image tag — bumped explicitly via PR. ``latest`` is only published
 # on main; per-branch builds publish ``<branch>-<sha>``. This default points
@@ -79,6 +94,21 @@ DEFAULT_IMAGE = "ghcr.io/thewisp/lerobot-training:feat-gui-training-deploy-proto
 # Marker that selects the fake-training runner instead of real lerobot-train.
 # Used by orchestrator unit tests so they don't depend on docker.
 FAKE_RECIPE_MARKER = "__fake__"
+
+# Execution mode — how the trainer runs, independent of WHICH trainer (the
+# recipe) runs. Set via Run.args["__execution__"]; absent means "docker".
+#
+#   docker  — `docker run <image> <entrypoint> …` (DESIGN.md § Unified
+#             execution). The default: bit-for-bit parity with cloud hosts,
+#             at the cost of a Docker install + image pull.
+#   native  — the entrypoint runs directly in the GUI server's own Python
+#             environment (`sys.executable -m …`), no container. Only valid
+#             on the local workstation host — the GUI server's venv is the
+#             one training uses, so this is meaningless on a remote host.
+#             The orchestrator guards against native-on-remote.
+EXECUTION_MODE_KEY = "__execution__"
+EXECUTION_DOCKER = "docker"
+EXECUTION_NATIVE = "native"
 
 # Absolute path to the fake-training worker (a test fixture in
 # ``tests/gui/``, set by its autouse fixture). None in production, so the
@@ -183,6 +213,13 @@ def is_hvla_flow_s1_recipe(run: Run) -> bool:
     return run.args.get("__recipe__") == HVLA_FLOW_S1_RECIPE
 
 
+def is_native_local(run: Run) -> bool:
+    """Whether this Run runs the trainer directly in the GUI server's Python
+    env (no docker). See :data:`EXECUTION_MODE_KEY`. Only meaningful on the
+    local workstation host — the orchestrator rejects it on remote hosts."""
+    return run.args.get(EXECUTION_MODE_KEY) == EXECUTION_NATIVE
+
+
 def output_subdir_in_run(run: Run) -> str:
     """Per-run output subdir name relative to the run's root.
 
@@ -216,9 +253,13 @@ def build_lerobot_train_command(run: Run, paths: RunPaths) -> tuple[list[str], d
     """
     if is_fake_recipe(run):
         return _build_fake_command(run, paths)
+    # Execution mode (docker vs native-local) is orthogonal to which trainer
+    # runs — both the standard lerobot-train recipe and the HVLA recipe can
+    # run either wrapped in the image or directly in this venv.
+    native = is_native_local(run)
     if is_hvla_flow_s1_recipe(run):
-        return _build_hvla_flow_s1_command(run, paths)
-    return _build_docker_command(run, paths)
+        return _build_hvla_flow_s1_command(run, paths, native=native)
+    return _build_docker_command(run, paths, native=native)
 
 
 def docker_available() -> bool:
@@ -279,7 +320,12 @@ _DEFAULT_LOG_FREQ = 200
 _TARGET_LOG_POINTS = 20
 
 
-def _docker_argv_base(image: str, paths: RunPaths, extra_mounts: list[str] | None = None) -> list[str]:
+def _docker_argv_base(
+    image: str,
+    paths: RunPaths,
+    extra_mounts: list[str] | None = None,
+    forward_env: list[str] | None = None,
+) -> list[str]:
     """The docker-run prefix shared by every recipe: GPU passthrough,
     host-identity placeholders, the arbitrary-uid env overrides, and the
     two bind mounts. One seam so the GPU-smoke lessons can't drift apart
@@ -289,6 +335,12 @@ def _docker_argv_base(image: str, paths: RunPaths, extra_mounts: list[str] | Non
     ``extra_mounts`` (already ``["-v", "src:dst:opts", ...]`` tokens) are
     spliced in just before the image — used to mount a local finetune-base
     checkpoint into the container.
+
+    ``forward_env`` names env vars to pass through from the launching process
+    (``-e NAME`` with no ``=value``). That form is what keeps a secret out of
+    the argv — docker copies the value from its own environment, which the
+    orchestrator populated. A name whose var is unset is simply not set in the
+    container, so forwarding is safe even when the value is absent.
 
     Post: ends with the image — callers append their entrypoint + args.
     """
@@ -341,6 +393,7 @@ def _docker_argv_base(image: str, paths: RunPaths, extra_mounts: list[str] | Non
         # HOME redirect alone doesn't cover the backbone-weights cache.
         "-e",
         "TORCH_HOME=/tmp/lerobot-home/.cache/torch",
+        *[tok for name in (forward_env or []) for tok in ("-e", name)],
         "-v",
         f"{hf_cache_host}:{CONTAINER_HF_CACHE}",
         "-v",
@@ -350,10 +403,27 @@ def _docker_argv_base(image: str, paths: RunPaths, extra_mounts: list[str] | Non
     ]
 
 
-def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[str, str]]:
-    image = run.args.get("__image__") or DEFAULT_IMAGE
+def _standard_train_flags(run: Run, paths: RunPaths, *, native: bool) -> tuple[list[str], list[str]]:
+    """Translate Run.args → lerobot-train ``--key=value`` flags.
 
-    # Translate Run.args → lerobot-train --key=value flags
+    Shared by the docker and native-local standard recipes. Only two things
+    differ between the modes:
+      1. ``output_dir`` — a real host path for native, the ``/runs`` bind-mount
+         target for docker.
+      2. finetune base — native reads the checkpoint from its real host path;
+         docker bind-mounts it read-only into the container and rewrites the
+         flag to the in-container path.
+
+    Returns ``(train_args, extra_mounts)``. ``extra_mounts`` is always empty
+    for native — no container means no bind mounts.
+    """
+    output_dir = (
+        str(paths.root / CONTAINER_OUTPUT_SUBDIR)
+        if native
+        else f"{CONTAINER_RUNS_MOUNT}/{CONTAINER_OUTPUT_SUBDIR}"
+    )
+    forced = {**_FORCED_FLAGS, "output_dir": output_dir}
+
     train_args: list[str] = []
     extra_mounts: list[str] = []
     seen: set[str] = set()
@@ -362,22 +432,25 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         if k.startswith("__"):
             continue
         if k == "policy.pretrained_path":
-            # Finetune base. A local checkpoint dir isn't under either bind
-            # mount in the general case, so mount it read-only and rewrite the
-            # flag to the in-container path. A Hub repo id (not an existing
-            # local dir) passes through — resolved via the HF cache mount.
+            # Finetune base. A Hub repo id (not an existing local dir) passes
+            # through untouched in both modes — resolved via the HF cache.
             base = str(v).strip()
             if not base:
                 continue
             host_path = Path(base).expanduser()
-            if host_path.is_dir():
+            if native:
+                # No container: the trainer reads the checkpoint directly.
+                train_args.append(f"--policy.pretrained_path={host_path if host_path.is_dir() else base}")
+            elif host_path.is_dir():
+                # A local checkpoint dir isn't under either bind mount in the
+                # general case, so mount it read-only and rewrite the flag.
                 extra_mounts.extend(["-v", f"{host_path}:{CONTAINER_FINETUNE_BASE}:ro"])
                 train_args.append(f"--policy.pretrained_path={CONTAINER_FINETUNE_BASE}")
             else:
                 train_args.append(f"--policy.pretrained_path={base}")
             seen.add(k)
             continue
-        if k in _FORCED_FLAGS:
+        if k in forced:
             # User explicitly set a flag we'd otherwise force — silently
             # drop iff in the never-override set; otherwise let user win.
             if k in _NEVER_USER_OVERRIDE:
@@ -389,7 +462,7 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         seen.add(k)
 
     # Forced flags — emit only if user didn't already provide
-    for k, v in _FORCED_FLAGS.items():
+    for k, v in forced.items():
         if k in seen:
             continue
         train_args.append(f"--{k}={v}")
@@ -404,8 +477,26 @@ def _build_docker_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[st
         if steps > 0:
             train_args.append(f"--log_freq={max(1, min(_DEFAULT_LOG_FREQ, steps // _TARGET_LOG_POINTS))}")
 
+    return train_args, extra_mounts
+
+
+def _build_docker_command(
+    run: Run, paths: RunPaths, *, native: bool = False
+) -> tuple[list[str], dict[str, str]]:
+    train_args, extra_mounts = _standard_train_flags(run, paths, native=native)
+    if native:
+        # Run lerobot-train in the GUI server's own interpreter/venv. `-u`
+        # keeps stdout unbuffered so the log file fills in real time (docker
+        # already line-buffers; native must ask). `-m` guarantees the same
+        # environment the GUI server runs in rather than trusting PATH.
+        cmd = [sys.executable, "-u", "-m", "lerobot.scripts.lerobot_train", *train_args]
+        return cmd, {}
+    image = run.args.get("__image__") or DEFAULT_IMAGE
+    # Only a tracked run gets the key. Forwarding it unconditionally would put
+    # the GUI server's ambient WANDB_API_KEY inside every container we launch.
+    forward_env = [WANDB_API_KEY_ENV] if wandb_enabled(run.args) else []
     docker_argv = [
-        *_docker_argv_base(image, paths, extra_mounts),
+        *_docker_argv_base(image, paths, extra_mounts, forward_env),
         "lerobot-train",
         *train_args,
     ]
@@ -429,9 +520,12 @@ def _fmt_arg(v: Any) -> str:
 # ── HVLA Flow Matching S1 recipe ──────────────────────────────────────────────
 
 
-def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], dict[str, str]]:
+def _build_hvla_flow_s1_command(
+    run: Run, paths: RunPaths, *, native: bool = False
+) -> tuple[list[str], dict[str, str]]:
     """Compose a `docker run … python -m lerobot.policies.hvla.s1.flow_matching.train …`
-    argv for the HVLA Flow Matching S1 training script.
+    argv for the HVLA Flow Matching S1 training script (or, when ``native``,
+    the bare ``python -m …`` argv running in the GUI server's own venv).
 
     Differs from the lerobot-train recipe in three ways:
       1. Different entrypoint inside the container.
@@ -468,7 +562,12 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
     # S1-without-S2 path is taken — that's the prototype's scope per
     # DESIGN.md (S2 latents extraction is a separate workflow not wired
     # to the GUI yet).
-    forced_output_dir = f"{CONTAINER_RUNS_MOUNT}/{CONTAINER_OUTPUT_SUBDIR}"
+    # Native writes to a real host path; docker to the /runs bind-mount target.
+    forced_output_dir = (
+        str(paths.root / CONTAINER_OUTPUT_SUBDIR)
+        if native
+        else f"{CONTAINER_RUNS_MOUNT}/{CONTAINER_OUTPUT_SUBDIR}"
+    )
     if "--output-dir" not in train_args:
         train_args.extend(["--output-dir", forced_output_dir])
     else:
@@ -484,6 +583,9 @@ def _build_hvla_flow_s1_command(run: Run, paths: RunPaths) -> tuple[list[str], d
         idx = train_args.index("--s2-latent-path")
         del train_args[idx : idx + 2]
 
+    if native:
+        cmd = [sys.executable, "-u", "-m", "lerobot.policies.hvla.s1.flow_matching.train", *train_args]
+        return cmd, {}
     docker_argv = [
         *_docker_argv_base(image, paths),
         *HVLA_FLOW_S1_ENTRYPOINT,
