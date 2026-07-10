@@ -221,6 +221,125 @@ class TestPostFeatures:
         assert info["features_schema"]["pe_flag"]["is_per_episode"] is True
 
 
+# ── POST /api/datasets/{id}/features — subtask bootstrap (N9) ────────
+
+
+class TestSubtaskBootstrap:
+    """Adding a feature named ``subtask`` provisions the full LeRobot 3.0
+    subtask format (per-frame ``subtask_index`` int64 column plus the
+    ``meta/subtasks.parquet`` lookup), not a raw string column."""
+
+    def _add_subtask(self, app, dataset_id, *, dtype="string", fill="idle"):
+        return _post_json(
+            app,
+            f"/api/datasets/{dataset_id}/features",
+            {
+                "name": "subtask",
+                "dtype": dtype,
+                "shape": [1],
+                "per_episode": False,
+                "fill_value": fill,
+            },
+        )
+
+    def test_bootstrap_creates_column_and_lookup(self, app_with_state, opened_dataset):
+        import pandas as pd
+        import pyarrow.parquet as pq
+
+        app, _state = app_with_state
+        dataset_id, ds = opened_dataset
+
+        resp = self._add_subtask(app, dataset_id, fill="idle")
+        assert resp.status_code == 200, resp.text
+        payload = resp.json()
+        assert payload["added"] == ["subtask"]
+
+        # Schema synthesizes the display feature and hides the storage name.
+        schema = payload["info"]["features_schema"]
+        assert "subtask" in schema, sorted(schema.keys())
+        assert "subtask_index" not in schema
+        assert schema["subtask"]["dtype"] == "string"
+
+        # Lookup table: one row, fill string at index 0.
+        lookup = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+        assert lookup.index.name == "subtask"
+        assert list(lookup.index) == ["idle"]
+        assert list(lookup["subtask_index"]) == [0]
+
+        # Data shards: every frame carries subtask_index = 0.
+        for f in (ds.root / "data").rglob("*.parquet"):
+            t = pq.read_table(f)
+            assert "subtask_index" in t.column_names
+            assert all(v == 0 for v in t.column("subtask_index").to_pylist())
+
+    def test_rejects_storage_name(self, app_with_state, opened_dataset):
+        app, _state = app_with_state
+        dataset_id, _ds = opened_dataset
+        resp = _post_json(
+            app,
+            f"/api/datasets/{dataset_id}/features",
+            {
+                "name": "subtask_index",
+                "dtype": "int64",
+                "shape": [1],
+                "per_episode": False,
+                "fill_value": 0,
+            },
+        )
+        assert resp.status_code == 400
+        assert "subtask" in resp.json()["detail"]
+
+    def test_rejects_non_string_dtype(self, app_with_state, opened_dataset):
+        app, _state = app_with_state
+        dataset_id, _ds = opened_dataset
+        resp = self._add_subtask(app, dataset_id, dtype="int64", fill="")
+        assert resp.status_code == 400
+        assert "string" in resp.json()["detail"]
+
+    def test_rejects_when_already_present(self, app_with_state, opened_dataset):
+        app, _state = app_with_state
+        dataset_id, _ds = opened_dataset
+        assert self._add_subtask(app, dataset_id).status_code == 200
+        resp = self._add_subtask(app, dataset_id)
+        assert resp.status_code == 400
+        assert "already has" in resp.json()["detail"]
+
+    def test_range_edit_stays_range_and_stages_string(self, app_with_state, opened_dataset):
+        """After bootstrap, staging a sub-range edit on the synthetic
+        ``subtask`` feature must (a) keep the staged range — the declared
+        per_episode=False must beat the uniform-fill inference — and
+        (b) store the storage feature name with the raw string value."""
+        app, _state = app_with_state
+        dataset_id, ds = opened_dataset
+        assert self._add_subtask(app, dataset_id).status_code == 200
+
+        ep_length = int(ds.meta.episodes[0]["length"])
+        sub_from, sub_to = 1, max(2, ep_length - 1)
+        resp = _post_json(
+            app,
+            "/api/edits/feature-set",
+            {
+                "dataset_id": dataset_id,
+                "episode_index": 0,
+                "feature": "subtask",
+                "frame_from": sub_from,
+                "frame_to": sub_to,
+                "value": "grasp",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+        pending = _get_json(app, "/api/edits").json()["edits"]
+        edits = [e for e in pending if e["params"].get("feature") == "subtask_index"]
+        assert edits, f"no pending subtask_index edit found: {pending}"
+        params = edits[-1]["params"]
+        assert params["value"] == "grasp"
+        assert (params["frame_from"], params["frame_to"]) == (sub_from, sub_to), (
+            f"subtask edit was coerced from [{sub_from}, {sub_to}) to "
+            f"[{params['frame_from']}, {params['frame_to']}) — declared per_episode=False should prevent this"
+        )
+
+
 # ── POST /api/datasets/{id}/features/defaults (T8) ───────────────────
 
 

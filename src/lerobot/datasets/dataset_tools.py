@@ -1253,6 +1253,89 @@ def add_features_inplace(
         logging.warning(f"dataset.finalize() failed (non-fatal for in-place schema add): {e}")
 
 
+def bootstrap_subtask_format(
+    dataset: "LeRobotDataset",
+    initial_subtask: str = "",
+) -> None:
+    """Provision the LeRobot 3.0 subtask format on a dataset that lacks it.
+
+    Creates the ``meta/subtasks.parquet`` lookup (string → index) and appends
+    a per-frame ``subtask_index`` (int64) column, labeling every existing
+    frame ``initial_subtask``. Afterwards, per-range subtask strings can be
+    assigned via :func:`lerobot.datasets.feature_value_edits.set_feature_values`
+    (new strings are appended to the lookup at Save time).
+
+    The lookup is written before the column: a crash in between leaves a
+    lookup-only dataset, which readers ignore and a retry reuses; the reverse
+    partial state (column without lookup) would be undecodable. A pre-existing
+    lookup (e.g. from a prior partial run) is reused — ``initial_subtask``
+    resolves to its existing row when present.
+
+    ``subtask_index`` is declared ``per_episode=False``: subtask labeling is
+    per-frame-range by design, and without the explicit declaration the
+    constant initial fill would be inferred as per-episode-uniform, coercing
+    range edits to whole episodes.
+
+    Args:
+        dataset: The dataset to extend. Must already be loaded.
+        initial_subtask: Label applied to every existing frame.
+
+    Raises:
+        ValueError: If the dataset already has a ``subtask_index`` feature or
+            ``initial_subtask`` is not a string.
+    """
+    from lerobot.datasets.io_utils import load_subtasks
+    from lerobot.datasets.utils import DEFAULT_SUBTASKS_PATH
+
+    if not isinstance(initial_subtask, str):
+        raise ValueError(f"initial_subtask must be a string, got {type(initial_subtask).__name__}")
+    if "subtask_index" in dataset.meta.features:
+        raise ValueError("Dataset already has a 'subtask_index' feature")
+
+    subtasks_df = load_subtasks(dataset.root)
+    if subtasks_df is None:
+        subtasks_df = pd.DataFrame(
+            {"subtask_index": pd.array([], dtype="int64")},
+            index=pd.Index([], name="subtask"),
+        )
+    existing = {str(name): int(row["subtask_index"]) for name, row in subtasks_df.iterrows()}
+    if initial_subtask in existing:
+        fill_index = existing[initial_subtask]
+    else:
+        # Row position must equal the subtask_index value — readers decode
+        # positionally (``meta.subtasks.iloc[idx].name``) — so append at the
+        # end with the next index, same as the Save-time resolver.
+        fill_index = (max(existing.values()) + 1) if existing else 0
+        new_row = pd.DataFrame(
+            {"subtask_index": [fill_index]},
+            index=pd.Index([initial_subtask], name="subtask"),
+        )
+        updated = pd.concat([subtasks_df, new_row]) if len(subtasks_df) else new_row
+        subtasks_path = Path(dataset.root) / DEFAULT_SUBTASKS_PATH
+        subtasks_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = subtasks_path.with_suffix(subtasks_path.suffix + ".tmp")
+        try:
+            updated.to_parquet(tmp_path)
+            os.replace(tmp_path, subtasks_path)
+        except Exception:
+            if tmp_path.exists():
+                # safe-destruct: our own .tmp lookup-table file
+                tmp_path.unlink()
+            raise
+
+    # add_features_inplace replaces dataset.meta with a fresh load, which
+    # picks up the lookup written above — no manual meta.subtasks refresh.
+    add_features_inplace(
+        dataset,
+        features={
+            "subtask_index": (
+                fill_index,
+                {"dtype": "int64", "shape": [1], "names": None, "per_episode": False},
+            )
+        },
+    )
+
+
 def remove_features_inplace(
     dataset: "LeRobotDataset",
     names: list[str] | str,

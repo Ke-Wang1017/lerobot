@@ -29,6 +29,7 @@ from lerobot.datasets.dataset_tools import (
     _sweep_orphan_tmp_shards,
     add_features,
     add_features_inplace,
+    bootstrap_subtask_format,
     convert_image_to_video_dataset,
     delete_episodes,
     merge_datasets,
@@ -1789,6 +1790,88 @@ def test_add_features_inplace_recomputes_stats(small_dataset_no_video):
     cols = set(table.column_names)
     reward_stat_cols = [c for c in cols if c.startswith("stats/reward/")]
     assert reward_stat_cols, f"no stats/reward/* columns in {cols}"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# bootstrap_subtask_format — provision subtask_index + meta/subtasks.parquet
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_bootstrap_subtask_format_fresh(small_dataset_no_video):
+    """Fresh bootstrap: lookup created with the fill string at index 0,
+    per-frame column added, and dataset reads decode the string."""
+    import pandas as pd
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    bootstrap_subtask_format(ds, initial_subtask="idle")
+
+    assert ds.meta.features["subtask_index"]["dtype"] == "int64"
+    assert ds.meta.features["subtask_index"].get("per_episode") is False
+    assert ds.meta.subtasks is not None
+
+    lookup = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+    assert lookup.index.name == "subtask"
+    assert list(lookup.index) == ["idle"]
+    assert list(lookup["subtask_index"]) == [0]
+
+    for f in (ds.root / "data").rglob("*.parquet"):
+        table = pq.read_table(f)
+        assert all(v == 0 for v in table.column("subtask_index").to_pylist())
+
+    # Reader auto-decode: every frame reports the initial label.
+    assert ds[0]["subtask"] == "idle"
+
+
+def test_bootstrap_subtask_format_reuses_existing_lookup(small_dataset_no_video):
+    """A pre-existing lookup (e.g. from a prior partial run) is reused:
+    a known initial string resolves to its row, a new one is appended."""
+    import pandas as pd
+    import pyarrow.parquet as pq
+
+    ds = small_dataset_no_video
+    prior = pd.DataFrame(
+        {"subtask_index": [0, 1]},
+        index=pd.Index(["approach", "grasp"], name="subtask"),
+    )
+    (ds.root / "meta").mkdir(exist_ok=True)
+    prior.to_parquet(ds.root / "meta" / "subtasks.parquet")
+
+    bootstrap_subtask_format(ds, initial_subtask="grasp")
+
+    lookup = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+    assert list(lookup.index) == ["approach", "grasp"], "existing rows must be preserved unchanged"
+    for f in (ds.root / "data").rglob("*.parquet"):
+        table = pq.read_table(f)
+        assert all(v == 1 for v in table.column("subtask_index").to_pylist())
+
+
+def test_bootstrap_subtask_format_appends_new_string_to_existing_lookup(small_dataset_no_video):
+    import pandas as pd
+
+    ds = small_dataset_no_video
+    prior = pd.DataFrame({"subtask_index": [0]}, index=pd.Index(["approach"], name="subtask"))
+    (ds.root / "meta").mkdir(exist_ok=True)
+    prior.to_parquet(ds.root / "meta" / "subtasks.parquet")
+
+    bootstrap_subtask_format(ds, initial_subtask="idle")
+
+    lookup = pd.read_parquet(ds.root / "meta" / "subtasks.parquet")
+    assert list(lookup.index) == ["approach", "idle"]
+    assert list(lookup["subtask_index"]) == [0, 1]
+    assert ds[0]["subtask"] == "idle"
+
+
+def test_bootstrap_subtask_format_rejects_existing_column(small_dataset_no_video):
+    ds = small_dataset_no_video
+    bootstrap_subtask_format(ds, initial_subtask="")
+    with pytest.raises(ValueError, match="already has"):
+        bootstrap_subtask_format(ds, initial_subtask="")
+
+
+def test_bootstrap_subtask_format_rejects_non_string_fill(small_dataset_no_video):
+    with pytest.raises(ValueError, match="must be a string"):
+        bootstrap_subtask_format(small_dataset_no_video, initial_subtask=0)
 
 
 def test_rename_features_inplace_renames_data_columns(small_dataset_no_video):

@@ -111,19 +111,31 @@
             showError(`'${name}' is a default feature — use the banner above instead.`);
             return;
         }
+        if (name === "subtask_index") {
+            showError(
+                "Name it 'subtask' — the int64 index column and " +
+                "meta/subtasks.parquet lookup are created automatically."
+            );
+            return;
+        }
+        // "subtask" provisions the LeRobot 3.0 subtask format server-side
+        // (per-frame subtask_index + meta/subtasks.parquet lookup). Dtype /
+        // shape / per_episode are fixed by that format, so override whatever
+        // the form says; the confirm message spells out what will happen.
+        const isSubtask = name === "subtask";
         let shape, fillValue;
         try {
-            shape = parseShape(f.shape.value);
-            fillValue = parseFillValue(f.fill_value.value, f.dtype.value);
+            shape = isSubtask ? [1] : parseShape(f.shape.value);
+            fillValue = parseFillValue(f.fill_value.value, isSubtask ? "string" : f.dtype.value);
         } catch (err) {
             showError(err.message);
             return;
         }
         const body = {
             name,
-            dtype: f.dtype.value,
+            dtype: isSubtask ? "string" : f.dtype.value,
             shape,
-            per_episode: f.per_episode.checked,
+            per_episode: isSubtask ? false : f.per_episode.checked,
             fill_value: fillValue,
         };
         // Confirm: this rewrites every parquet shard, can't be undone via
@@ -132,9 +144,14 @@
         const totalEpisodes = window.datasets?.[datasetId]?.total_episodes ?? "?";
         const totalFrames = window.datasets?.[datasetId]?.total_frames ?? "?";
         const ok = window.confirm(
-            `Add column "${name}" (${body.dtype}[${shape.join(",")}]) ` +
-            `with initial fill ${JSON.stringify(fillValue)} ` +
-            `to ${totalFrames} frames across ${totalEpisodes} episodes?\n\n` +
+            (isSubtask
+                ? `Add subtask annotation to ${totalFrames} frames across ${totalEpisodes} episodes?\n\n` +
+                  "Creates the LeRobot 3.0 subtask format (per-frame subtask_index column + " +
+                  `meta/subtasks.parquet lookup). Every frame starts labeled ${JSON.stringify(fillValue)}; ` +
+                  "relabel frame ranges from the Inspector afterwards.\n\n"
+                : `Add column "${name}" (${body.dtype}[${shape.join(",")}]) ` +
+                  `with initial fill ${JSON.stringify(fillValue)} ` +
+                  `to ${totalFrames} frames across ${totalEpisodes} episodes?\n\n`) +
             "This rewrites the dataset's parquet shards in place. " +
             "Cannot be undone via Discard."
         );
@@ -193,6 +210,14 @@
         }
         f.dtype.addEventListener("change", autoUpdateFill);
         f.per_episode.addEventListener("change", autoUpdateFill);
+        // Naming it "subtask" fixes dtype to string at submit time; reflect
+        // that in the form as the user types so the override isn't a surprise.
+        f.name.addEventListener("input", () => {
+            if (f.name.value.trim() === "subtask" && f.dtype.value !== "string") {
+                f.dtype.value = "string";
+                autoUpdateFill();
+            }
+        });
         f.addEventListener("submit", submit);
         const cancelBtn = document.getElementById("add-feature-cancel");
         if (cancelBtn) {

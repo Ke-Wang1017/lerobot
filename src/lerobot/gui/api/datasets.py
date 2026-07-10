@@ -1872,6 +1872,36 @@ async def add_dataset_feature(dataset_id: str, body: AddFeatureRequest) -> AddFe
                 "(banner) instead of the generic dialog."
             ),
         )
+    if body.name == SUBTASK_STORAGE_FEATURE:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{SUBTASK_STORAGE_FEATURE}' is the storage column of the subtask format — "
+                f"add '{SUBTASK_DISPLAY_FEATURE}' instead; the index column and "
+                "meta/subtasks.parquet lookup are provisioned automatically."
+            ),
+        )
+    is_subtask = body.name == SUBTASK_DISPLAY_FEATURE
+    if is_subtask:
+        # Provisions the full LeRobot 3.0 subtask format (subtask_index int64
+        # column + meta/subtasks.parquet lookup), not a raw string column.
+        # ``per_episode`` from the request is ignored — subtask labeling is
+        # per-frame-range by design (see bootstrap_subtask_format).
+        if body.dtype != "string":
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{SUBTASK_DISPLAY_FEATURE}' must have dtype 'string', got '{body.dtype}'",
+            )
+        if list(body.shape) != [1]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{SUBTASK_DISPLAY_FEATURE}' must have shape [1], got {list(body.shape)}",
+            )
+        if not isinstance(body.fill_value, str):
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{SUBTASK_DISPLAY_FEATURE}' fill_value must be a string",
+            )
 
     pending = _app_state.pending_feature_set_edits_for_dataset(dataset_id)
     if pending:
@@ -1886,6 +1916,29 @@ async def add_dataset_feature(dataset_id: str, body: AddFeatureRequest) -> AddFe
             raise HTTPException(
                 status_code=400,
                 detail=f"Feature '{body.name}' already exists in dataset",
+            )
+
+        if is_subtask:
+            from lerobot.datasets.dataset_tools import bootstrap_subtask_format
+
+            if SUBTASK_STORAGE_FEATURE in dataset.meta.features:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Dataset already has a '{SUBTASK_STORAGE_FEATURE}' feature",
+                )
+            try:
+                bootstrap_subtask_format(dataset, initial_subtask=body.fill_value)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            except Exception as e:
+                logger.exception(f"bootstrap_subtask_format failed for {dataset_id}: {e}")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+            _refresh_dataset_after_schema_change(dataset_id)
+            # Report the display name — that's the feature the schema now
+            # synthesizes and the one the user asked for.
+            return AddFeatureResponse(
+                added=[SUBTASK_DISPLAY_FEATURE], info=_dataset_info_from(dataset_id, dataset)
             )
 
         # Always write the declared per_episode value (including False) so

@@ -373,6 +373,8 @@ Asymmetry is user-reported: "I'm pretty sure subtask is a default feature (more 
 
 (2) is cleaner architecturally; (1) is closer to the current PR's spirit. Either way, the current state — reward and success special-cased, subtask_index left out — is the asymmetry to fix.
 
+**Resolved (2026-07-10)** via a dialog special-case rather than either direction above: naming the feature `subtask` in the "+ Add feature" dialog provisions the full LeRobot 3.0 format — `dataset_tools.bootstrap_subtask_format()` writes `meta/subtasks.parquet` (initial fill string at index 0, reusing a pre-existing lookup when present) then adds the per-frame `subtask_index` int64 column via `add_features_inplace` with declared `per_episode=False` (dense range labeling must not coerce to whole episodes — the reward lesson, not the `per_episode=True` suggested in (1)). Direct `subtask_index` adds are rejected with a pointer to `subtask`. The "Common features" preset list remains open as polish.
+
 ---
 
 ## 🟡 N10. `features_schema` open-response contract pinned by integration test
