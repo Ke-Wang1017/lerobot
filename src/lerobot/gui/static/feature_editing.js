@@ -503,9 +503,104 @@
                 <div><span class="summary-key">frames:</span> <span class="summary-value">${ds.total_frames ?? "?"}</span></div>
                 <div><span class="summary-key">fps:</span> <span class="summary-value">${ds.fps ?? "?"}</span></div>
                 <div><span class="summary-key">robot:</span> <span class="summary-value">${escapeHtml(ds.robot_type || "—")}</span></div>
+                ${renderDatasetTasksHtml(ds)}
                 <div style="margin-top:10px; color:#888; font-style:italic;">Click or drag inside the timeline area to edit feature values.</div>
             </div>
         `;
+        body.querySelectorAll(".task-edit-btn").forEach(btn => {
+            btn.addEventListener("click", () => beginTaskEdit(datasetId, Number(btn.dataset.taskIdx)));
+        });
+    }
+
+    // ── Dataset-level task (language description) display + rename ──────
+
+    function renderDatasetTasksHtml(ds) {
+        const tasks = ds.tasks || [];
+        if (!tasks.length) {
+            // Older backend (no `tasks` field) or a dataset with an empty
+            // tasks table — show the row so users learn the concept exists.
+            return '<div><span class="summary-key">task:</span> ' +
+                '<span class="summary-value" style="color:#888; font-style:italic;">none recorded</span></div>';
+        }
+        return tasks.map((t, i) => {
+            const key = tasks.length === 1 ? "task" : `task ${i}`;
+            return `<div class="dataset-task-row" data-task-idx="${i}" style="display:flex; align-items:baseline; gap:4px;">` +
+                `<span class="summary-key" style="flex:none;">${key}:</span>` +
+                `<span class="summary-value" style="flex:1; overflow-wrap:anywhere;">${escapeHtml(t)}</span>` +
+                `<button type="button" class="task-edit-btn" data-task-idx="${i}" ` +
+                `title="Edit this dataset's task description (the language instruction stored in meta/tasks.parquet)" ` +
+                `style="flex:none; background:none; border:none; cursor:pointer; color:#888; padding:0 2px;">✎</button>` +
+                `</div>`;
+        }).join("");
+    }
+
+    function beginTaskEdit(datasetId, taskIdx) {
+        const ds = window.datasets && window.datasets[datasetId];
+        const oldTask = ds && ds.tasks ? ds.tasks[taskIdx] : null;
+        if (oldTask == null) return;
+        const row = document.querySelector(`#inspector-body .dataset-task-row[data-task-idx="${taskIdx}"]`);
+        if (!row) return;
+        row.style.display = "block";
+        row.innerHTML =
+            `<input type="text" class="task-edit-input" value="${escapeHtml(oldTask)}" ` +
+            `style="width:100%; box-sizing:border-box; margin:2px 0;">` +
+            `<div style="display:flex; gap:6px; margin-top:4px;">` +
+            `<button type="button" class="btn-small task-edit-save">Save</button>` +
+            `<button type="button" class="btn-small secondary task-edit-cancel">Cancel</button>` +
+            `</div>`;
+        const input = row.querySelector(".task-edit-input");
+        input.focus();
+        input.select();
+        const cancel = () => renderInspectorEmpty(datasetId);
+        const save = () => {
+            const newTask = input.value.trim();
+            if (!newTask || newTask === oldTask) { cancel(); return; }
+            saveTaskRename(datasetId, oldTask, newTask);
+        };
+        row.querySelector(".task-edit-save").addEventListener("click", save);
+        row.querySelector(".task-edit-cancel").addEventListener("click", cancel);
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") save();
+            else if (e.key === "Escape") cancel();
+        });
+    }
+
+    async function saveTaskRename(datasetId, oldTask, newTask) {
+        try {
+            const res = await fetch(`/api/datasets/${encodeURIComponent(datasetId)}/tasks`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ old_task: oldTask, new_task: newTask }),
+            });
+            if (!res.ok) {
+                let detail = `HTTP ${res.status}`;
+                try { detail = (await res.json()).detail || detail; } catch (_) { /* keep status */ }
+                throw new Error(detail);
+            }
+            const info = await res.json();
+            window.datasets[datasetId] = info;
+            // Per-episode task strings changed too — refresh the episode list
+            // so tree tooltips and the Run tab's task dropdowns pick up the
+            // new text (they read episodes[*].task, not dataset.tasks).
+            try {
+                const epRes = await fetch(`/api/datasets/${encodeURIComponent(datasetId)}/episodes`);
+                if (epRes.ok) {
+                    window.episodes[datasetId] = await epRes.json();
+                    window.datasets[datasetId].total_episodes = window.episodes[datasetId].length;
+                }
+            } catch (_) { /* stale episode list is cosmetic; next open refreshes */ }
+            if (typeof window.renderTree === "function") window.renderTree();
+            if (typeof window.refreshRunDatasetSelects === "function") window.refreshRunDatasetSelects();
+            if (typeof window.showToast === "function") {
+                window.showToast("Task updated", escapeHtml(newTask), "success");
+            }
+        } catch (e) {
+            if (typeof window.showToast === "function") {
+                window.showToast("Task rename failed", escapeHtml(e.message), "error", 8000);
+            }
+        } finally {
+            renderInspectorEmpty(datasetId);
+        }
     }
 
     function renderInspector() {

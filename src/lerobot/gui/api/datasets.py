@@ -1056,6 +1056,10 @@ class DatasetInfo(BaseModel):
     fps: int
     robot_type: str = ""
     camera_keys: list[str]
+    tasks: list[str] = []
+    # Dataset-level natural-language task descriptions from meta/tasks.parquet,
+    # in task_index order. Usually a single entry (one instruction for the
+    # whole dataset); multi-task datasets list one string per task.
     features: list[str]  # feature names only — preserved for backwards-compat
     features_schema: dict[str, FeatureSchema] = {}
     # Full per-feature schema (dtype, shape, names) keyed by feature name.
@@ -1405,6 +1409,13 @@ def _dataset_info_from(
         feature_names = [
             SUBTASK_DISPLAY_FEATURE if n == SUBTASK_STORAGE_FEATURE else n for n in feature_names
         ]
+    # Dataset-level task strings from meta/tasks.parquet (df indexed by task
+    # string, task_index column), surfaced in task_index order so the GUI can
+    # show/edit the language description(s) of the dataset.
+    tasks_df = getattr(dataset.meta, "tasks", None)
+    task_strings = (
+        [str(t) for t in tasks_df.sort_values("task_index").index] if tasks_df is not None else []
+    )
     return DatasetInfo(
         id=dataset_id,
         repo_id=dataset.repo_id,
@@ -1414,6 +1425,7 @@ def _dataset_info_from(
         fps=dataset.fps,
         robot_type=getattr(dataset.meta, "robot_type", "") or "",
         camera_keys=list(dataset.meta.camera_keys),
+        tasks=task_strings,
         features=feature_names,
         features_schema=_build_features_schema(
             dataset.meta.features,
@@ -2135,6 +2147,39 @@ async def remove_dataset_feature(dataset_id: str, feature_name: str) -> RemoveFe
 
         _refresh_dataset_after_schema_change(dataset_id)
         return RemoveFeatureResponse(removed=[feature_name], info=_dataset_info_from(dataset_id, dataset))
+
+
+class RenameTaskRequest(BaseModel):
+    """Rename one dataset-level task (language description) string."""
+
+    old_task: str
+    new_task: str
+
+
+@router.patch("/{dataset_id:path}/tasks")
+async def rename_dataset_task(dataset_id: str, body: RenameTaskRequest) -> DatasetInfo:
+    """Rename a task string across the dataset, in place.
+
+    Metadata-only operation (data shards store ``task_index``): rewrites
+    ``meta/tasks.parquet`` and the per-episode ``tasks`` lists in
+    ``meta/episodes/*.parquet``, then refreshes the in-memory metadata.
+    Returns the updated DatasetInfo (with the new ``tasks`` list).
+    """
+    from lerobot.datasets.dataset_tools import rename_task
+
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+
+    async with _app_state.get_lock(dataset_id):
+        dataset = _app_state.datasets[dataset_id]
+        try:
+            rename_task(dataset, body.old_task, body.new_task)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except Exception as e:
+            logger.exception(f"rename_task failed for {dataset_id}: {e}")
+            raise HTTPException(status_code=500, detail=str(e)) from e
+        return _dataset_info_from(dataset_id, dataset)
 
 
 @router.delete("/{dataset_id:path}")

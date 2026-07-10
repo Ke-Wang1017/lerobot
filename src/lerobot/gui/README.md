@@ -122,6 +122,13 @@ printed in the banner.
 4. Right-click → Clear Trim to undo before saving.
 5. Click **Save Changes** to apply — re-encodes only the trimmed segment using a streaming video encoder.
 
+## Task Description
+
+- With a dataset open, the Inspector panel (right side) shows the dataset's natural-language task description(s) from `meta/tasks.parquet` — e.g. *"Pick up the cube with the right arm and transfer it to the left arm."*
+- Click the ✎ next to a task to rename it inline (`Enter` saves, `Escape` cancels).
+- Renames are metadata-only: data shards store `task_index`, so only `meta/tasks.parquet` and the per-episode metadata are rewritten — no video or data re-encoding.
+- Renaming a task to another task's exact text is refused, since that would silently merge the two tasks.
+
 ## Rerun Integration
 
 Right-click any episode → **Open in Rerun** to launch the [Rerun](https://rerun.io/) visualizer for that episode. This spawns a separate process independent of the web server.

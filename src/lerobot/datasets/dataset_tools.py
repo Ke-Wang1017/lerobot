@@ -650,6 +650,61 @@ def merge_into(
     return target
 
 
+def rename_task(dataset: LeRobotDataset, old_task: str, new_task: str) -> None:
+    """Rename a task (natural-language description) across a dataset, in place.
+
+    Data shards store only ``task_index``, so a rename is metadata-only: the
+    string changes in ``meta/tasks.parquet`` (the index) and in the
+    per-episode ``tasks`` lists of every ``meta/episodes/*.parquet`` shard.
+    ``dataset.meta.tasks`` and ``dataset.meta.episodes`` are refreshed in
+    place afterwards, so an already-open dataset serves the new string
+    without a full reload.
+
+    Raises:
+        ValueError: unknown ``old_task``, empty ``new_task``, or ``new_task``
+            already present (renaming onto an existing task would silently
+            merge two tasks — use a dedicated merge operation for that).
+    """
+    new_task = new_task.strip()
+    if not new_task:
+        raise ValueError("New task description must be non-empty")
+    if old_task not in dataset.meta.tasks.index:
+        raise ValueError(f"Unknown task: {old_task!r}")
+    if new_task == old_task:
+        return
+    if new_task in dataset.meta.tasks.index:
+        raise ValueError(f"Task already exists: {new_task!r} (renaming would merge two tasks)")
+
+    tasks = dataset.meta.tasks.rename(index={old_task: new_task})
+    tasks.index.name = "task"
+    write_tasks(tasks, dataset.meta.root)
+
+    episodes_dir = Path(dataset.meta.root) / "meta" / "episodes"
+    for parquet_path in sorted(episodes_dir.rglob("*.parquet")):
+        df = pd.read_parquet(parquet_path)
+        if "tasks" not in df.columns:
+            continue
+        mask = df["tasks"].apply(lambda ep_tasks: old_task in list(ep_tasks))
+        if not mask.any():
+            continue
+        df.loc[mask, "tasks"] = df.loc[mask, "tasks"].apply(
+            lambda ep_tasks: [new_task if t == old_task else t for t in ep_tasks]
+        )
+        # Atomic write, same rationale as write_tasks: a crash mid-write must
+        # not leave a truncated shard that blocks every subsequent load.
+        tmp = parquet_path.with_suffix(parquet_path.suffix + ".tmp")
+        try:
+            df.to_parquet(tmp, index=False)
+            os.replace(tmp, parquet_path)
+        except Exception:
+            with contextlib.suppress(FileNotFoundError):
+                tmp.unlink()
+            raise
+
+    dataset.meta.tasks = tasks
+    dataset.meta.episodes = load_episodes(dataset.meta.root)
+
+
 def modify_features(
     dataset: LeRobotDataset,
     add_features: dict[str, tuple[np.ndarray | torch.Tensor | Callable, dict]] | None = None,
